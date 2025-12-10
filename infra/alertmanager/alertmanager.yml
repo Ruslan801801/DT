@@ -1,0 +1,9 @@
+route:
+receiver: 'devops'
+group_interval: 1m
+repeat_interval: 1h
+
+receivers:
+- name: 'devops'
+webhook_configs:
+- url: 'http://example.com/alert-webhook'  # TODO: replace

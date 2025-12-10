@@ -1,0 +1,6 @@
+DeepTea — quickstart
+
+1) yarn install
+2) docker compose up -d postgres redis
+3) yarn dev:server
+4) yarn dev:mobile

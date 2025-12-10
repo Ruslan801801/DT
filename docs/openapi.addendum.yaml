@@ -1,0 +1,48 @@
+openapi: 3.0.3
+info:
+title: DeepTea API Addendum
+version: 1.0.0
+components:
+securitySchemes:
+bearerAuth:
+type: http
+scheme: bearer
+bearerFormat: JWT
+headers:
+Idempotency-Key:
+description: 'Format: <uuid4>:<action>. TTL: 24h'
+schema: { type: string }
+paths:
+/api/ble/resolve:
+post:
+summary: Resolve EID to candidate
+responses:
+'200':
+description: Always 200; found may be false
+content:
+application/json:
+schema:
+type: object
+properties:
+found: { type: boolean }
+candidate:
+type: object
+default:
+description: error
+/api/p2p/create:
+post:
+headers:
+Idempotency-Key:
+$ref: '#/components/headers/Idempotency-Key'
+responses:
+'200': { description: ok }
+'409':
+description: idempotency reuse (past response returned)
+/api/p2p/undo:
+post:
+summary: Undo last tx within window
+responses:
+'200':
+description: undone
+'400':
+description: window elapsed

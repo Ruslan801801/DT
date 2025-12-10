@@ -1,0 +1,40 @@
+groups:
+- name: deeptea-slo
+interval: 30s
+rules:
+- alert: P2PHighErrorRate
+expr: (1 - (success_online_percent / 100)) > 0.3
+for: 5m
+labels:
+severity: page
+annotations:
+summary: "High error rate in P2P"
+description: "success_online_percent < 70% for 5m"
+- alert: HighTTR
+expr: (rate(ttr_ms_sum[5m]) / rate(ttr_ms_count[5m])) > 2000
+for: 10m
+labels:
+severity: warn
+annotations:
+summary: "High average TTR (>2s)"
+description: "Average TTR exceeds 2 seconds"
+
+- name: deeptea-ble
+interval: 30s
+rules:
+- alert: LowBleScanAvailability
+expr: ble_scan_availability_percent < 80
+for: 10m
+labels:
+severity: warn
+annotations:
+summary: "BLE scan availability low"
+description: "ble_scan_availability_percent below 80%"
+- alert: HighCandidateFlipRate
+expr: candidate_flip_rate > 0.3
+for: 15m
+labels:
+severity: info
+annotations:
+summary: "High candidate flip rate"
+description: "Instability in nearby list (flip_rate>0.3)"

@@ -1,0 +1,154 @@
+*** /dev/null
+--- b/mobile/src/config.ts
+@@
++export const CONFIG = {
++  API_BASE_URL: process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000',
++  REQUEST_TIMEOUT_MS: 10000,
++};
++
+*** a/mobile/src/services/api.ts
+--- b/mobile/src/services/api.ts
+@@
+-import { CONFIG } from '../config';
+-
+-const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+-const cryptoRandom = () => Math.random().toString(36).slice(2);
+-
+-export const api = {
+-  async p2pCreate(body: any, retries = 3) {
+-    for (let i = 0; i < retries; i++) {
+-      try {
+-        const res = await fetch(`${CONFIG.API_BASE_URL}/api/p2p/create`, {
+-          method: 'POST',
+-          headers: {
+-            'Content-Type': 'application/json',
+-            'Idempotency-Key': `${cryptoRandom()}:${Date.now()}`
+-          },
+-          body: JSON.stringify(body),
+-        });
+-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+-        return await res.json();
+-      } catch (err) {
+-        if (i === retries - 1) throw err;
+-        await delay(1000 * Math.pow(2, i)); // 1s, 2s, 4s
+-      }
+-    }
+-  }
+-};
++import { CONFIG } from '../config';
++
++const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
++const cryptoRandom = () => Math.random().toString(36).slice(2);
++
++const withTimeout = async <T>(p: Promise<T>, ms: number, ctrl: AbortController) => {
++  const t = setTimeout(() => ctrl.abort('Request timeout'), ms);
++  try { return await p; } finally { clearTimeout(t); }
++};
++
++export const api = {
++  async p2pCreate(body: any, retries = 3) {
++    const key = `${cryptoRandom()}:${Date.now()}`;
++    for (let i = 0; i < retries; i++) {
++      const ctrl = new AbortController();
++      try {
++        const res = await withTimeout(fetch(`${CONFIG.API_BASE_URL}/api/p2p/create`, {
++          method: 'POST',
++          headers: {
++            'Content-Type': 'application/json',
++            'Idempotency-Key': key
++          },
++          body: JSON.stringify(body),
++          signal: ctrl.signal,
++        }), CONFIG.REQUEST_TIMEOUT_MS, ctrl);
++
++        if (!res.ok) throw new Error(`HTTP ${res.status}`);
++        return await res.json();
++      } catch (err) {
++        if (i === retries - 1) throw err;
++        await delay(1000 * Math.pow(2, i)); // 1s, 2s, 4s
++      }
++    }
++  }
++};
+*** a/mobile/src/store/appStore.ts
+--- b/mobile/src/store/appStore.ts
+@@
+-const logger =
++const logger =
+   (config: any) =>
+   (set: any, get: any, api: any) =>
+     config((args: any) => {
+-      console.log('[store update]', args);
++      if (__DEV__) {
++        // eslint-disable-next-line no-console
++        console.log('[store update]', args);
++      }
+       set(args);
+     }, get, api);
+*** a/README.md
+--- b/README.md
+@@
+-# DeepTea Monorepo
++# DeepTea — P2P чаевые по BLE (iOS + Android) и ваучеры оффлайн
++
++**DeepTea** — кроссплатформенный проект (React Native + NestJS) для быстрых чаевых и микроплатежей между устройствами поблизости. Ключевая идея — **BLE-обнаружение** получателя и **оффлайн-ваучеры** (подписанные Ed25519), которые можно погасить, когда одна из сторон снова онлайн.
++
++## Коротко о стекe
++- **Mobile:** React Native (Expo), BLE модуль, Zustand-store, навигация.
++- **Server:** NestJS + PostgreSQL + Redis, идемпотентность, метрики Prometheus, rate-limit.
++- **Infra:** Docker Compose, Nginx, Prometheus/Grafana, healthchecks.
++
++## Почему это удобно
++- Отдаёшь чаевые **без ввода реквизитов** — рядом по BLE.
++- Работает даже **без интернета**: создаётся ваучер, который погасится позже.
++- **Прозрачные риски**: TTL ваучера, риск-скоры, идемпотентность, лимиты.
++
++## Быстрый старт мобилки
++Смотри `mobile/README.md` (Expo, EAS, переменные окружения).
++
++## Наблюдаемость и операции
++- `/ready` — healthcheck; Nginx проксирует `/api` и ограничивает rate.
++- `/metrics` — Prometheus-метрики, включая гистограммы времени ответа.
++- Nginx логирует тайминги (`rt`, `urt`) → легко строить графики в Grafana/Loki.
++
++## Планы
++- Улучшение BLE (фоновый скан/рекламирование).
++- Расширение интеграций PSP, локальные провайдеры.
++- E2E через Testcontainers (Postgres/Redis).
++
+*** /dev/null
+--- b/.github/workflows/eas-android-preview.yml
+@@
++name: EAS Android (preview)
++on:
++  workflow_dispatch:
++  push:
++    branches: [ "develop", "main" ]
++    paths:
++      - "mobile/**"
++      - "eas.json"
++      - ".github/workflows/eas-android-preview.yml"
++jobs:
++  build-android-preview:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - name: Setup Node
++        uses: actions/setup-node@v4
++        with:
++          node-version: 18
++      - name: Install EAS CLI
++        run: npm i -g eas-cli
++      - name: Check EAS projectId (soft)
++        run: |
++          if ! grep -q '"projectId":' eas.json; then
++            echo "⚠️  EAS project not initialized. Run 'eas init' locally and commit eas.json."
++          fi
++      - name: Build Android (preview internal)
++        if: ${{ env.EXPO_TOKEN != '' }}
++        env:
++          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
++        run: |
++          cd mobile
++          eas build -p android --profile preview --non-interactive || true
++

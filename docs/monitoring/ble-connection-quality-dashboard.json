@@ -1,0 +1,14 @@
+{
+  "title": "BLE Connection Quality",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "RSSI Distribution",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(ble_rssi_bucket[5m])) by (le))"
+        }
+      ]
+    }
+  ]
+}

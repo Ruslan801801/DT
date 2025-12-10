@@ -1,0 +1,49 @@
+*** a/infra/docker-compose.prod.yml
+--- b/infra/docker-compose.prod.yml
+@@
+ services:
+   api:
+     image: deeptea/api:latest
+     healthcheck:
+-      test: ["CMD", "curl", "-f", "http://localhost:3000/ready"]
++      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ready || node -e \"require('http').get('http://localhost:3000/ready',res=>{if(res.statusCode===200)process.exit(0);process.exit(1);})\""]
+       interval: 30s
+       timeout: 10s
+       retries: 3
+       start_period: 40s
+*** a/infra/nginx/nginx.conf
+--- b/infra/nginx/nginx.conf
+@@
+   upstream api {
+     server api:3000;
+     keepalive 32;
+   }
+   limit_req_zone $binary_remote_addr zone=api_zone:10m rate=10r/s;
+   limit_req_status 429;
++
++  # Лог-формат с таймингами (подходит для Loki/Grafana)
++  log_format main_timed '$remote_addr - $remote_user [$time_local] '
++    '\"$request\" $status $body_bytes_sent '
++    '\"$http_referer\" \"$http_user_agent\" '
++    'rt=$request_time urt=$upstream_response_time uct=$upstream_connect_time '
++    'uht=$upstream_header_time';
++
++  access_log /var/log/nginx/access.log main_timed;
+*** /dev/null
+--- b/docs/GRAFANA-NGINX-LOKI.md
+@@
++# Nginx → Loki (Grafana) краткая шпаргалка
++
++1) Включён лог-формат `main_timed` с таймингами (`request_time`, `upstream_*`).  
++2) Отправляйте `/var/log/nginx/access.log` в Loki при помощи promtail. Пример `scrape_config`:
++```yaml
++scrape_configs:
++  - job_name: nginx
++    static_configs:
++      - targets: [localhost]
++        labels:
++          job: nginx
++          __path__: /var/log/nginx/access.log
++```
++3) В Grafana строим графики по полям `rt`, `urt`.
++

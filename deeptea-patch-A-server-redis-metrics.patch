@@ -1,0 +1,186 @@
+*** /dev/null
+--- b/server/src/providers/redis.provider.ts
+@@
++import { Provider } from '@nestjs/common';
++import Redis from 'ioredis';
++
++export const REDIS_TOKEN = 'REDIS_CLIENT';
++
++let singleton: Redis | null = null;
++
++export const RedisProvider: Provider = {
++  provide: REDIS_TOKEN,
++  useFactory: (): Redis => {
++    if (!singleton) {
++      const url = process.env.REDIS_URL || 'redis://redis:6379';
++      singleton = new Redis(url, {
++        maxRetriesPerRequest: 2,
++        enableReadyCheck: true,
++        lazyConnect: false
++      });
++      singleton.on('error', (e) => {
++        // eslint-disable-next-line no-console
++        console.error('[redis] error', e?.message);
++      });
++    }
++    return singleton;
++  },
++};
++
+*** a/server/src/middlewares/rate-limit-redis.middleware.ts
+--- b/server/src/middlewares/rate-limit-redis.middleware.ts
+@@
+-import { Injectable, NestMiddleware, HttpException } from '@nestjs/common';
++import { Injectable, NestMiddleware, HttpException, Inject } from '@nestjs/common';
+ import type { Request, Response, NextFunction } from 'express';
+-import Redis from 'ioredis';
++import type Redis from 'ioredis';
++import { REDIS_TOKEN } from '../providers/redis.provider';
+@@
+-@Injectable()
+-export class RedisRateLimitMiddleware implements NestMiddleware {
+-  private redis: Redis;
+-  constructor() {
+-    this.redis = new Redis(process.env.REDIS_URL || 'redis://redis:6379');
+-  }
++@Injectable()
++export class RedisRateLimitMiddleware implements NestMiddleware {
++  constructor(@Inject(REDIS_TOKEN) private readonly redis: Redis) {}
+@@
+   async use(req: Request, _res: Response, next: NextFunction) {
+     const key = `rate_limit:${req.ip}:${req.path}`;
+     const current = await this.redis.incr(key);
+     if (current === 1) await this.redis.expire(key, 60);
+     if (current > 100) throw new HttpException('Rate limit exceeded', 429);
+     next();
+   }
+ }
+*** /dev/null
+--- b/server/src/metrics/histogram.ts
+@@
++export type HistogramLabels = Record<string, string>;
++
++export class Histogram {
++  private buckets: number[];
++  private counts: Map<string, number[]> = new Map();
++  private sum: Map<string, number> = new Map();
++  private cnt: Map<string, number> = new Map();
++
++  constructor(buckets: number[] = [5, 10, 25, 50, 100, 250, 500, 1000, 2500]) {
++    this.buckets = [...buckets].sort((a,b)=>a-b);
++  }
++
++  private key(labels: HistogramLabels) {
++    return Object.keys(labels).sort().map(k=>`${k}=${labels[k]}`).join('|');
++  }
++
++  observe(valueMs: number, labels: HistogramLabels) {
++    const key = this.key(labels);
++    if (!this.counts.has(key)) this.counts.set(key, new Array(this.buckets.length+1).fill(0));
++    if (!this.sum.has(key)) this.sum.set(key, 0);
++    if (!this.cnt.has(key)) this.cnt.set(key, 0);
++
++    const arr = this.counts.get(key)!;
++    let idx = this.buckets.findIndex(b => valueMs <= b);
++    if (idx === -1) idx = this.buckets.length; // +Inf bucket
++    arr[idx] += 1;
++
++    this.sum.set(key, (this.sum.get(key) ?? 0) + valueMs);
++    this.cnt.set(key, (this.cnt.get(key) ?? 0) + 1);
++  }
++
++  export(name: string) {
++    const lines: string[] = [];
++    lines.push(`# TYPE ${name} histogram`);
++    for (const [key, counts] of this.counts.entries()) {
++      const labels: HistogramLabels = {};
++      key.split('|').filter(Boolean).forEach(p=>{
++        const [k,v] = p.split('=');
++        labels[k]=v;
++      });
++      let cumulative = 0;
++      for (let i=0;i<counts.length;i++){
++        cumulative += counts[i];
++        const le = i < this.buckets.length ? this.buckets[i] : '+Inf';
++        const labelStr = Object.entries({...labels, le: String(le)}).map(([k,v])=>`${k}="${v}"`).join(',');
++        lines.push(`${name}_bucket{${labelStr}} ${cumulative}`);
++      }
++      const sum = this.sum.get(key) || 0;
++      const cnt = this.cnt.get(key) || 0;
++      const baseLabels = Object.entries(labels).map(([k,v])=>`${k}="${v}"`).join(',');
++      lines.push(`${name}_sum{${baseLabels}} ${sum}`);
++      lines.push(`${name}_count{${baseLabels}} ${cnt}`);
++    }
++    return lines.join('\n');
++  }
++}
++
+*** a/server/src/metrics/extended-metrics.service.ts
+--- b/server/src/metrics/extended-metrics.service.ts
+@@
+-import { Injectable } from '@nestjs/common';
+-
+-@Injectable()
+-export class ExtendedMetricsService {
+-  private requestDuration = new Map<string, number[]>();
+-  observe(method: string, path: string, durationMs: number) {
+-    const key = `${method}:${path}`;
+-    const arr = this.requestDuration.get(key) ?? [];
+-    arr.push(durationMs);
+-    this.requestDuration.set(key, arr);
+-  }
+-  export(): string {
+-    const lines: string[] = [];
+-    for (const [key, durations] of this.requestDuration.entries()) {
+-      if (!durations.length) continue;
+-      const sum = durations.reduce((a, b) => a + b, 0);
+-      const avg = sum / durations.length;
+-      const sorted = [...durations].sort((a, b) => a - b);
+-      const p95 = sorted[Math.floor(sorted.length * 0.95)];
+-      lines.push(`http_request_duration_ms_avg{key="${key}"} ${avg}`);
+-      lines.push(`http_request_duration_ms_p95{key="${key}"} ${p95}`);
+-    }
+-    return lines.join('\n');
+-  }
+-}
++import { Injectable } from '@nestjs/common';
++import { Histogram } from './histogram';
++
++@Injectable()
++export class ExtendedMetricsService {
++  private httpHistogram = new Histogram([5,10,25,50,100,250,500,1000,2500]);
++
++  observe(method: string, path: string, durationMs: number) {
++    this.httpHistogram.observe(durationMs, { method, path });
++  }
++
++  export(): string {
++    return this.httpHistogram.export('http_request_duration_ms');
++  }
++}
++
+*** /dev/null
+--- b/server/test/e2e/bootstrap.spec.ts
+@@
++/**
++ * E2E scaffold с Testcontainers (псевдо, можно адаптировать под ваш тест-раннер).
++ * Тест помечен как .skip, пока окружение не настроено.
++ */
++import { describe, it } from '@jest/globals';
++
++describe.skip('E2E bootstrap (Testcontainers)', () => {
++  it('starts Postgres/Redis and boots app', async () => {
++    // Здесь будет запуск testcontainers для postgres/redis
++    // и проверка эндпоинтов /ready, /api/...
++  });
++});
++
+*** /dev/null
+--- b/server/src/app.module.ts.addon.txt
+@@
++// Напоминание: зарегистрируйте RedisProvider в AppModule / CoreModule
++// import { RedisProvider } from './providers/redis.provider';
++// @Module({ providers: [RedisProvider], exports: [RedisProvider] })
++// export class CoreModule {}
++// …и подключите CoreModule в AppModule.
++

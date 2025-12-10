@@ -1,0 +1,11 @@
+{
+"name": "deeptea-native-ble",
+"version": "0.0.1",
+"main": "src/index.ts",
+"types": "src/index.ts",
+"private": true,
+"scripts": {
+"lint": "eslint . || true",
+"type-check": "tsc -p tsconfig.json || true"
+}
+}

@@ -1,0 +1,34 @@
+{
+"title": "DeepTea — BLE & Quick-Send",
+"panels": [
+{
+"type": "timeseries",
+"title": "ttr_ms (avg)",
+"targets": [
+{
+"expr": "rate(ttr_ms_sum[5m]) / rate(ttr_ms_count[5m])"
+}
+]
+},
+{
+"type": "stat",
+"title": "Quick-Send Success (%)",
+"targets": [
+{
+"expr": "success_online_percent"
+}
+]
+},
+{
+"type": "timeseries",
+"title": "BLE Scan Availability (%)",
+"targets": [
+{
+"expr": "ble_scan_availability_percent"
+}
+]
+}
+],
+"timezone": "browser",
+"version": 1
+}

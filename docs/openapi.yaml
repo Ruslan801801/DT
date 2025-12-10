@@ -1,0 +1,64 @@
+openapi: 3.0.3
+info:
+title: DeepTea API
+version: 0.0.1
+paths:
+/health:
+get:
+summary: Health check
+responses:
+'200':
+description: ok
+/api/ble/resolve:
+post:
+summary: Resolve EID to candidate
+requestBody:
+required: true
+content:
+application/json:
+schema:
+type: object
+properties:
+eid:
+type: string
+responses:
+'200':
+description: Found or not found
+content:
+application/json:
+schema:
+type: object
+properties:
+found: { type: boolean }
+candidate:
+type: object
+nullable: true
+/api/p2p/create:
+post:
+summary: Create P2P transaction (idempotent)
+parameters:
+- in: header
+name: Idempotency-Key
+schema: { type: string }
+required: true
+requestBody:
+required: true
+content:
+application/json:
+schema:
+type: object
+properties:
+sender_id: { type: string }
+receiver_eid: { type: string }
+amount: { type: number }
+responses:
+'200':
+description: ok
+'409':
+description: idempotency reuse
+/api/p2p/undo:
+post:
+summary: Undo within window
+responses:
+'200':
+description: undone or reason

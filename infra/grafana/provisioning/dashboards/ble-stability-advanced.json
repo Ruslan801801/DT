@@ -1,0 +1,43 @@
+{
+"title": "DeepTea — BLE Stability",
+"timezone": "browser",
+"panels": [
+{
+"type": "timeseries",
+"title": "BLE Scan Availability %",
+"targets": [
+{
+"expr": "ble_scan_availability_percent"
+}
+]
+},
+{
+"type": "timeseries",
+"title": "Candidate Flip Rate",
+"targets": [
+{
+"expr": "candidate_flip_rate"
+}
+]
+},
+{
+"type": "timeseries",
+"title": "Average TTR (ms)",
+"targets": [
+{
+"expr": "rate(ttr_ms_sum[5m]) / rate(ttr_ms_count[5m])"
+}
+]
+},
+{
+"type": "stat",
+"title": "Success Online %",
+"targets": [
+{
+"expr": "success_online_percent"
+}
+]
+}
+],
+"version": 1
+}
