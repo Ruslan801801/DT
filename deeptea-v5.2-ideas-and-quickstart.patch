@@ -1,0 +1,277 @@
+diff --git a/docs/DEEPTEA-v5.2.md b/docs/DEEPTEA-v5.2.md
+new file mode 100644
+index 0000000..9e2b0e4
+--- /dev/null
++++ b/docs/DEEPTEA-v5.2.md
+@@ -0,0 +1,223 @@
++# DeepTea v5.2 — план на быстрый запуск (MVP++)
++
++Этот документ описывает **версию 5.2** как “быстрое, запускаемое ядро”:
++
++- минимум функций, которые дают “вау” и ощущение продукта;
++- минимум инфраструктуры, чтобы **собрать/запустить** без танцев;
++- архитектура, которую потом можно наращивать.
++
++---
++
++## 1) Цель v5.2 (что должно работать)
++
++### Пользовательский сценарий “за 30 секунд”
++1. Получатель открывает приложение и включает “Я принимаю чаевые”.
++2. Отправитель рядом видит получателя (BLE) **или** сканирует QR (fallback).
++3. Отправитель вводит сумму/сообщение → подтверждает.
++4. Получатель получает “receipt” (экран + шаринг-ссылка/QR) и видит историю.
++
++### Два режима (обязательно)
++- **Online**: есть интернет → создаём платёж/инвойс через API.
++- **Offline voucher**: интернета нет → создаём **подписанный ваучер**, который можно погасить позже.
++
++---
++
++## 2) Что входит в v5.2 (Scope)
++
++### A. Мини-ядро платежа (API)
++- `POST /api/tips/create` — создать чаевые (online)
++- `POST /api/vouchers/issue` — выпустить офлайн-ваучер (подпись Ed25519)
++- `POST /api/vouchers/redeem` — погасить ваучер
++- `GET /api/tips/feed?recipientId=` — история/лента
++- `GET /api/health` — healthcheck для compose/продакшена
++
++### B. Устройства рядом (Mobile)
++- BLE discovery + нормализация RSSI (EMA) + “топ ближайших”
++- “Receive Mode”: экран получателя + QR fallback (id / deeplink)
++- “Quick Tip”: минимальная форма + подтверждение
++
++### C. Риск-ограничения (минимум)
++- порог по RSSI (чтобы “с другого конца улицы” не срабатывало)
++- ограничение частоты (rate limit per sender/recipient)
++- анти-спам: капча/пауза после N попыток
++
++---
++
++## 3) Что НЕ входит в v5.2 (сознательно)
++- сложный KYC/AML (вместо этого — “hooks” и заглушки)
++- NFT/сертификаты/токены/кланы
++- сложные роли/организации
++- multi-currency / crypto
++
++---
++
++## 4) Предложения по улучшениям (самое полезное на практике)
++
++### 4.1 QR fallback как обязательный “спасательный круг”
++BLE бывает капризным. В v5.2 QR нужен всегда:
++- если BLE не работает → всё равно можно отправить.
++- QR кодирует **deeplink** или `recipientId` + короткий одноразовый `nonce`.
++
++### 4.2 “Receipt” — то, что люди шарят
++После чаевых:
++- “Спасибо” экран
++- кнопка “Поделиться”
++- ссылка вида `/r/<receiptId>` (может быть публичной без PII)
++
++### 4.3 “Undo window” 10 секунд (по желанию)
++Это сильная UX-фишка:
++- в online режиме — отмена до capture
++- в offline — отмена ваучера до “handed_over”
++
++---
++
++## 5) Структура данных (черновик)
++
++### Tip
++- id (uuid)
++- sender_id (uuid | nullable для “guest”)
++- recipient_id (uuid)
++- amount_minor (int)
++- currency (string, "RUB")
++- message (string | nullable)
++- status ("created"|"paid"|"canceled")
++- created_at
++
++### Voucher
++- id (uuid)
++- recipient_id (uuid)
++- amount_minor
++- currency
++- expires_at
++- state ("issued"|"handed_over"|"redeemed"|"revoked"|"expired")
++- payload (json)
++- signature (base64)
++- issued_at
++
++---
++
++## 6) Модули сервера (как удобно разложить)
++
++- `tips/` (controller/service/repo)
++- `vouchers/` (ed25519, states, TTL)
++- `auth/` (минимум: device token / optional jwt)
++- `risk/` (порог rssi, rate-limit)
++- `health/` (liveness/readiness)
++
++---
++
++## 7) План разработки (3 коротких спринта)
++
++### Sprint 1 — “Запускается локально”
++- docker compose для зависимостей (Postgres/Redis)
++- health endpoint
++- tips:create + tips:feed
++
++### Sprint 2 — “Офлайн ваучер”
++- issue/redeem, подписи, TTL
++- состояния и идемпотентность
++- простая админ-страница “погашения”
++
++### Sprint 3 — “Вау-демо”
++- BLE discovery + QR fallback
++- receipt share
++- базовый risk (RSSI + rate limit)
++
++---
++
++## 8) Чеклист качества v5.2
++
++- [ ] `docker compose up` поднимает Postgres/Redis
++- [ ] сервер стартует локально (dev) и видит БД
++- [ ] `GET /api/health` → 200
++- [ ] можно создать tip и увидеть в feed
++- [ ] ваучер: issue → redeem → статус redeemed
++
+diff --git a/docs/QUICKSTART-v5.2.md b/docs/QUICKSTART-v5.2.md
+new file mode 100644
+index 0000000..a4a8e6b
+--- /dev/null
++++ b/docs/QUICKSTART-v5.2.md
+@@ -0,0 +1,162 @@
++# Quickstart v5.2 (самый короткий путь к демо)
++
++Репозиторий — монорепо (mobile/server/infra/shared и т.д.).
++
++## 1) Поднять зависимости (Postgres + Redis)
++
++В корне репо:
++
++```bash
++docker compose -f infra/docker-compose.deps.yml --env-file infra/.env up -d
++```
++
++Проверка:
++
++```bash
++docker ps
++```
++
++## 2) Сервер (NestJS) — dev режим
++
++Вариант A: запуск на хосте (рекомендуется для старта)
++
++```bash
++cd server
++npm i
++npm run start:dev
++```
++
++Если у вас Yarn:
++
++```bash
++cd server
++yarn
++yarn start:dev
++```
++
++## 3) Мобильное (Expo)
++
++```bash
++cd mobile
++npm i
++npx expo start
++```
++
++## 4) Мини-настройки окружения
++
++Скопируйте пример:
++
++```bash
++cp infra/.env.example infra/.env
++```
++
++По умолчанию:
++- Postgres: `localhost:5432`
++- Redis: `localhost:6379`
++
++## 5) Следующий шаг
++
++Когда всё поднялось — реализуем “v5.2 Scope” из `docs/DEEPTEA-v5.2.md`.
++
+diff --git a/infra/.env.example b/infra/.env.example
+new file mode 100644
+index 0000000..8c9b6c2
+--- /dev/null
++++ b/infra/.env.example
+@@ -0,0 +1,22 @@
++# =========================
++# DeepTea infra (deps only)
++# =========================
++
++POSTGRES_DB=deeptea
++POSTGRES_USER=deeptea
++POSTGRES_PASSWORD=deeptea
++
++# If your server uses DATABASE_URL, form it like:
++# DATABASE_URL=postgresql://deeptea:deeptea@localhost:5432/deeptea?schema=public
++
++REDIS_HOST=localhost
++REDIS_PORT=6379
++
++# Optional: expose ports to the host
++POSTGRES_PORT=5432
++REDIS_PORT_EXPOSE=6379
++
+diff --git a/infra/docker-compose.deps.yml b/infra/docker-compose.deps.yml
+new file mode 100644
+index 0000000..6c3fe62
+--- /dev/null
++++ b/infra/docker-compose.deps.yml
+@@ -0,0 +1,88 @@
++name: deeptea-deps
++
++services:
++  postgres:
++    image: postgres:16-alpine
++    container_name: deeptea-postgres
++    environment:
++      POSTGRES_DB: ${POSTGRES_DB:-deeptea}
++      POSTGRES_USER: ${POSTGRES_USER:-deeptea}
++      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deeptea}
++    ports:
++      - "${POSTGRES_PORT:-5432}:5432"
++    volumes:
++      - deeptea_pg:/var/lib/postgresql/data
++    healthcheck:
++      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
++      interval: 5s
++      timeout: 5s
++      retries: 20
++    restart: unless-stopped
++
++  redis:
++    image: redis:7-alpine
++    container_name: deeptea-redis
++    ports:
++      - "${REDIS_PORT_EXPOSE:-6379}:6379"
++    command: ["redis-server", "--appendonly", "yes"]
++    volumes:
++      - deeptea_redis:/data
++    healthcheck:
++      test: ["CMD", "redis-cli", "ping"]
++      interval: 5s
++      timeout: 3s
++      retries: 20
++    restart: unless-stopped
++
++volumes:
++  deeptea_pg:
++  deeptea_redis:
++
