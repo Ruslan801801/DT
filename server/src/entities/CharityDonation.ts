@@ -26,4 +26,4 @@ export class CharityDonation {
   created_at!: Date;
 }
 
----
+// ---

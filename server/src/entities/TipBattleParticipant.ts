@@ -20,4 +20,4 @@ export class TipBattleParticipant {
   joined_at!: Date;
 }
 
----
+// ---

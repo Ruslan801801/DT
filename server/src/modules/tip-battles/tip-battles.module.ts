@@ -9,4 +9,4 @@ import { MetricsService } from '../../metrics/metrics.service';
 })
 export class TipBattlesModule {}
 
----
+// ---

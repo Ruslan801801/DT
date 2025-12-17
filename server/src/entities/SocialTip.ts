@@ -39,4 +39,4 @@ export class SocialTip {
   created_at!: Date;
 }
 
----
+// ---
