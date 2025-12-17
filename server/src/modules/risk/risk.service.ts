@@ -16,3 +16,6 @@ constructor(private cfg: RiskConfig = DEFAULTS) {}
 decide(input: RiskInput, shadow = true): RiskDecision {
 const reasons: string[] = [];
 let score = 1;
+
+}
+}
