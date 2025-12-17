@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { setupSwagger } from './swagger';
 import helmet from 'helmet';
 import csurf from 'csurf';
 import { ValidationPipe } from '@nestjs/common';
