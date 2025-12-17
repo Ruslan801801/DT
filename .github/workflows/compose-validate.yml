@@ -1,0 +1,22 @@
+name: Compose validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose files (if exist)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if [ -f docker-compose.yml ]; then
+            docker compose -f docker-compose.yml config >/dev/null
+          fi
+          if [ -f docker-compose.prod.yml ]; then
+            docker compose -f docker-compose.prod.yml config >/dev/null
+          fi

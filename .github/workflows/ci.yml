@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install + checks (root/server/mobile if present)
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          install_dir () {
+            local dir="$1"
+            [ -f "$dir/package.json" ] || return 0
+            echo "---- install in $dir ----"
+            pushd "$dir" >/dev/null
+
+            if [ -f pnpm-lock.yaml ]; then
+              corepack enable
+              pnpm install --frozen-lockfile
+            elif [ -f yarn.lock ]; then
+              corepack enable
+              yarn install --frozen-lockfile || yarn install
+            elif [ -f package-lock.json ]; then
+              npm ci
+            else
+              npm install
+            fi
+
+            run_if () {
+              local name="$1"
+              node -e "p=require('./package.json'); process.exit(p.scripts && p.scripts['$name'] ? 0 : 1)" \
+                && (echo "run: $name" && npm run "$name") \
+                || echo "skip: no $name script"
+            }
+
+            run_if lint
+            run_if typecheck
+            run_if test
+            run_if build
+
+            popd >/dev/null
+          }
+
+          install_dir .
+          install_dir server
+          install_dir mobile
