@@ -37,6 +37,7 @@ jobs:
         env:
           OPENAPI_EXPORT_PATH: ../docs/openapi.json
           APP_VERSION: 0.1.0
+          SKIP_ENV_VALIDATION: "1"
 
       - name: Upload OpenAPI artifact
         uses: actions/upload-artifact@v4

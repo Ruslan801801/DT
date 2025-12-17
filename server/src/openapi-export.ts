@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import { writeFileSync } from 'fs';
-import { resolve } from 'path';
+import { mkdirSync, writeFileSync } from 'fs';
+import { dirname, resolve } from 'path';
 import { AppModule } from './app.module';
 
 async function main() {
@@ -16,7 +16,9 @@ async function main() {
   const doc = SwaggerModule.createDocument(app, cfg);
 
   const outPath = process.env.OPENAPI_EXPORT_PATH ?? 'openapi.json';
-  writeFileSync(resolve(outPath), JSON.stringify(doc, null, 2) + '\n');
+  const abs = resolve(outPath);
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, JSON.stringify(doc, null, 2) + '\n');
 
   await app.close();
 }

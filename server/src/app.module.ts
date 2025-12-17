@@ -20,7 +20,7 @@ imports: [
         '.env.example',
         'env.example',
       ],
-      validate: validateEnv,
+      validate: process.env.SKIP_ENV_VALIDATION === '1' ? undefined : validateEnv,
     }),
 BleModule, P2PModule, VouchersModule, HealthModule, AuthModule, PaymentsModule],
 })
