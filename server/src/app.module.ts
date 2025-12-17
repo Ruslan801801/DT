@@ -8,6 +8,7 @@ import { HealthModule } from './modules/health/health.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { RateLimitMiddleware } from './middlewares/rate-limit.middleware';
 import { AuthModule } from './modules/auth/auth.module';
+import { DemoModule } from './modules/demo/demo.module';
 
 @Module({
 imports: [
