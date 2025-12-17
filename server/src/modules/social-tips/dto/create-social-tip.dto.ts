@@ -36,4 +36,4 @@ export class CreateSocialTipDto {
   tags?: string[];
 }
 
----
+// ---

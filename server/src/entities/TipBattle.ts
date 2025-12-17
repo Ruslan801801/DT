@@ -33,4 +33,4 @@ export class TipBattle {
   updated_at!: Date;
 }
 
----
+// ---

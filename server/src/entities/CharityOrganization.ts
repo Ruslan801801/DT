@@ -25,4 +25,4 @@ export class CharityOrganization {
   updated_at!: Date;
 }
 
----
+// ---
