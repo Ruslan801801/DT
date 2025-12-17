@@ -1,0 +1,37 @@
+name: openapi
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "server/**"
+      - ".github/workflows/openapi.yml"
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install (server)
+        working-directory: server
+        run: npm ci
+
+      - name: Export OpenAPI -> docs/openapi.json
+        working-directory: server
+        run: npm run openapi:export
+        env:
+          OPENAPI_EXPORT_PATH: ../docs/openapi.json
+          APP_VERSION: 0.1.0
+
+      - name: Upload OpenAPI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi
+          path: docs/openapi.json
