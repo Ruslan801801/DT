@@ -37,6 +37,14 @@ jobs:
             npm install --include=dev --no-audit --no-fund
           fi
 
+      - name: Ensure @types/node present
+        working-directory: server
+        run: |
+          if [ ! -d node_modules/@types/node ]; then
+            npm install --no-save @types/node@^20 --no-audit --no-fund
+          fi
+          npm ls @types/node || true
+
       - name: Export OpenAPI -> docs/openapi.json
         working-directory: server
         run: npm run openapi:export
