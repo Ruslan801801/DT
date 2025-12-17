@@ -11,6 +11,7 @@ import { buildCorsOptions } from './config/cors';
 
 async function bootstrap() {
 const app = await NestFactory.create(AppModule, { logger: buildWinstonLogger() });
+  setupSwagger(app);
 app.enableCors(buildCorsOptions());
 app.use(helmet());
 if (process.env.ENABLE_CSRF === '1') { app.use(csurf({ cookie: true })); }
