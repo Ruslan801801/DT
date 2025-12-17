@@ -33,7 +33,7 @@ services:
       dockerfile: Dockerfile
     restart: always
     env_file:
-      - ../server/env.example
+      - ./server/env.example
     depends_on:
       - postgres
       - redis
