@@ -1,41 +1,46 @@
-import { Body, Controller, Get } from '@nestjs/common';
-import { NotFoundException, Post } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
-
+import { Body, Controller, Get, Headers, Post, Query, UseGuards } from '@nestjs/common';
+import { DemoModeGuard } from './demo.guard';
 import { DemoService } from './demo.service';
-import { DevLoginDto } from './dto/dev-login.dto';
-import { CreateDemoTipDto } from './dto/create-demo-tip.dto';
 
-@ApiTags('demo')
 @Controller('demo')
+@UseGuards(DemoModeGuard)
 export class DemoController {
   constructor(private readonly demo: DemoService) {}
 
-  private ensureNotProd() {
-    const env = process.env.NODE_ENV || 'development';
-    if (env === 'production') throw new NotFoundException();
+  @Get('health')
+  health() {
+    return this.demo.health();
+  }
+
+  @Post('reset')
+  reset(@Query('seed') seed?: string) {
+    const doSeed = seed == null ? true : seed !== 'false';
+    return this.demo.reset(doSeed);
   }
 
   @Post('login')
-  @ApiOperation({ summary: 'Dev login (returns demo token)' })
-  login(@Body() dto: DevLoginDto) {
-    this.ensureNotProd();
-    const u = this.demo.login(dto.name);
-    return { ok: true, user: { id: u.id, name: u.name }, token: u.token };
+  login(@Body() body: any) {
+    return this.demo.login(body && body.name ? String(body.name) : undefined);
   }
 
   @Post('tip')
-  @ApiOperation({ summary: 'Create demo tip (in-memory)' })
-  tip(@Body() dto: CreateDemoTipDto) {
-    this.ensureNotProd();
-    const tip = this.demo.createTip(dto);
-    return { ok: true, tip };
+  tip(
+    @Body() body: any,
+    @Headers('authorization') auth?: string,
+    @Headers('x-demo-token') xDemoToken?: string,
+  ) {
+    const bearer = (auth || '').startsWith('Bearer ') ? (auth || '').slice(7) : '';
+    const token = xDemoToken || bearer || (body && body.fromToken) || '';
+    return this.demo.createTip({
+      fromToken: token ? String(token) : undefined,
+      toName: String(body && body.toName ? body.toName : 'Someone'),
+      amount: Number(body && body.amount ? body.amount : 0),
+      message: body && body.message ? String(body.message) : undefined,
+    });
   }
 
   @Get('feed')
-  @ApiOperation({ summary: 'Demo feed (last 50)' })
   feed() {
-    this.ensureNotProd();
-    return { ok: true, items: this.demo.feed() };
+    return this.demo.feed();
   }
 }
