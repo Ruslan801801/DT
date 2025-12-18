@@ -1,0 +1,49 @@
+name: openapi
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "server/**"
+      - ".github/workflows/openapi.yml"
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install (root workspaces)
+        env:
+          NPM_CONFIG_PRODUCTION: "false"
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --include=dev --workspaces
+          else
+            npm install --include=dev --no-audit --no-fund
+          fi
+
+      - name: Ensure @types/node for server workspace
+        run: |
+          npm install --no-save --workspace=deeptea-server @types/node@^20 --no-audit --no-fund
+          echo "== check types =="
+          ls -la node_modules/@types/node 2>/dev/null || true
+          ls -la server/node_modules/@types/node 2>/dev/null || true
+          npm ls --workspace=deeptea-server @types/node || true
+
+      - name: Export OpenAPI -> docs/openapi.json
+        run: npm run --workspace=deeptea-server openapi:export
+        env:
+          OPENAPI_EXPORT_PATH: ${{ github.workspace }}/docs/openapi.json
+          APP_VERSION: 0.1.0
+          SKIP_ENV_VALIDATION: "1"
+
+      - name: Upload OpenAPI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi
+          path: docs/openapi.json
