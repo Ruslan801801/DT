@@ -27,14 +27,6 @@ jobs:
             npm install --include=dev --no-audit --no-fund
           fi
 
-      - name: Ensure @types/node for server workspace
-        run: |
-          npm install --no-save --workspace=deeptea-server @types/node@^20 --no-audit --no-fund
-          echo "== check types =="
-          ls -la node_modules/@types/node 2>/dev/null || true
-          ls -la server/node_modules/@types/node 2>/dev/null || true
-          npm ls --workspace=deeptea-server @types/node || true
-
       - name: Export OpenAPI -> docs/openapi.json
         run: npm run --workspace=deeptea-server openapi:export
         env:
