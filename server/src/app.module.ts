@@ -12,15 +12,17 @@ import { DemoModule } from './modules/demo/demo.module';
 
 @Module({
 imports: [
+    DemoModule,
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: [
         '.env',
         '.env.local',
         '.env.example',
-        'env.example',
-      ],
-      validate: validateEnv,
+        'env.example',,
+
+  ].filter(Boolean) as string[],
+      validate: process.env.SKIP_ENV_VALIDATION === '1' ? undefined : validateEnv,
     }),
 BleModule, P2PModule, VouchersModule, HealthModule, AuthModule, PaymentsModule],
 })

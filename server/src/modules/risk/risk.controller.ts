@@ -1,14 +1,14 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Post, Query } from '@nestjs/common';
 import { RiskService } from './risk.service';
-import { RiskInput } from './risk.types';
+import { RiskInput, RiskDecision } from './risk.types';
 
-@Controller('api/risk')
+@Controller('risk')
 export class RiskController {
-constructor(private readonly risk: RiskService) {}
+  constructor(private readonly risk: RiskService) {}
 
-@Post('decide')
-decide(@Body() body: RiskInput) {
-const res = this.risk.decide(body, /shadow=/true);
-return res;
-}
+  @Post('decide')
+  decide(@Body() body: RiskInput, @Query('shadow') shadow?: string): RiskDecision {
+    const isShadow = shadow == null ? true : shadow !== 'false';
+    return this.risk.decide(body, isShadow);
+  }
 }
