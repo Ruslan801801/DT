@@ -1,24 +1,32 @@
-# Demo Flow (dev only)
+# DT Demo Flow
 
-Swagger:
-- http://localhost:3000/docs
-- (если глобальный префикс /api — попробуй /api/docs)
+## Enable demo endpoints
+Set:
+- DEMO_MODE=1
 
-Demo endpoints (disabled in production):
+When DEMO_MODE is off, demo routes return 404 (hidden).
 
-1) Dev login:
-POST /api/demo/login
-Body: { "name": "Ruslan" }
+## Endpoints (если у тебя global prefix /api — добавь /api перед /demo)
+- GET  /demo/health
+- POST /demo/reset?seed=true
+- POST /demo/login   body: {"name":"Alice"}
+- POST /demo/tip     body: {"toName":"Bob","amount":150,"message":"Thanks"}
+  Token via headers:
+  - Authorization: Bearer <token>
+  - or X-Demo-Token: <token>
+- GET  /demo/feed
 
-2) Create tip:
-POST /api/demo/tip
-Body:
-{
-  "fromToken": "dt_demo_...",
-  "toName": "Barista",
-  "amount": 150,
-  "message": "Спасибо!"
-}
+## Quick curl (без jq)
+BASE="http://localhost:3000"
 
-3) Feed:
-GET /api/demo/feed
+curl -s "$BASE/demo/health"
+
+curl -s -X POST "$BASE/demo/login" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Alice"}'
+
+curl -s -X POST "$BASE/demo/tip" \
+  -H "Content-Type: application/json" \
+  -d '{"toName":"Bob","amount":150,"message":"Thanks"}'
+
+curl -s "$BASE/demo/feed"
