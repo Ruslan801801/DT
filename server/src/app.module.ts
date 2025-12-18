@@ -12,6 +12,7 @@ import { DemoModule } from './modules/demo/demo.module';
 
 @Module({
 imports: [
+    DemoModule,
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: [
@@ -19,7 +20,7 @@ imports: [
         '.env.local',
         '.env.example',
         'env.example',,
-    DemoModule
+
   ],
       validate: process.env.SKIP_ENV_VALIDATION === '1' ? undefined : validateEnv,
     }),
