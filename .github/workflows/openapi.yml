@@ -17,39 +17,20 @@ jobs:
         with:
           node-version: 20
 
-      - name: Cache npm
-        uses: actions/cache@v4
-        if: hashFiles('server/package-lock.json') != ''
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-server-${{ hashFiles('server/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-npm-server-
-
-      - name: Install (server)
-        working-directory: server
+      - name: Install (root workspaces)
         env:
           NPM_CONFIG_PRODUCTION: "false"
         run: |
           if [ -f package-lock.json ]; then
-            npm ci --include=dev
+            npm ci --include=dev --workspaces
           else
             npm install --include=dev --no-audit --no-fund
           fi
 
-      - name: Ensure @types/node present
-        working-directory: server
-        run: |
-          if [ ! -d node_modules/@types/node ]; then
-            npm install --no-save @types/node@^20 --no-audit --no-fund
-          fi
-          npm ls @types/node || true
-
       - name: Export OpenAPI -> docs/openapi.json
-        working-directory: server
-        run: npm run openapi:export
+        run: npm run --workspace=deeptea-server openapi:export
         env:
-          OPENAPI_EXPORT_PATH: ../docs/openapi.json
+          OPENAPI_EXPORT_PATH: docs/openapi.json
           APP_VERSION: 0.1.0
           SKIP_ENV_VALIDATION: "1"
 

@@ -22,15 +22,6 @@ jobs:
         with:
           node-version: 20
 
-      - name: Cache npm
-        uses: actions/cache@v4
-        if: hashFiles('mobile/package-lock.json') != ''
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-mobile-${{ hashFiles('mobile/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-npm-mobile-
-
       - name: Setup Expo & EAS
         uses: expo/expo-github-action@v8
         with:
