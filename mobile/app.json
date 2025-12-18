@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "DeepTea",
-    "slug": "deeptea",
+    "name": "DT",
+    "slug": "dt",
     "version": "0.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
