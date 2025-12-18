@@ -48,6 +48,7 @@
     "@types/jest": "^29.5.12",
     "testcontainers": "^10.9.0",
     "@testcontainers/postgresql": "^10.9.0",
-    "@testcontainers/redis": "^10.9.0"
+    "@testcontainers/redis": "^10.9.0",
+    "@types/node": "^20.0.0"
   }
 }
