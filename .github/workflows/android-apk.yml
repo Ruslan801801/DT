@@ -1,0 +1,45 @@
+name: Build Android APK (EAS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "EAS build profile from mobile/eas.json"
+        required: true
+        default: "preview"
+
+jobs:
+  build-android-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ВАЖНО: без cache: npm (у вас нет корневого lockfile)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install mobile deps
+        working-directory: mobile
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+
+      - name: Trigger EAS build (android apk)
+        working-directory: mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          eas build --platform android --profile "${{ inputs.profile }}" --non-interactive --no-wait --json > ../docs/eas-build-android.json
+          echo "Build triggered. See Expo build URL in logs above (or open docs/eas-build-android.json artifact)."
+
+      - name: Upload build metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: eas-build-android
+          path: docs/eas-build-android.json
