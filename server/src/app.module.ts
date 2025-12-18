@@ -21,7 +21,7 @@ imports: [
         '.env.example',
         'env.example',,
 
-  ],
+  ].filter(Boolean) as string[],
       validate: process.env.SKIP_ENV_VALIDATION === '1' ? undefined : validateEnv,
     }),
 BleModule, P2PModule, VouchersModule, HealthModule, AuthModule, PaymentsModule],
