@@ -32,8 +32,9 @@ jobs:
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
 
-      - name: EAS build
+      - name: EAS build Android (preview)
         working-directory: mobile
+        run: |
+          npx --yes eas-cli@latest build --platform android --profile preview --non-interactive --no-wait --json > ../docs/eas-build-android.json
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: npx eas build --platform "${{ inputs.platform }}" --profile "${{ inputs.profile }}" --non-interactive
