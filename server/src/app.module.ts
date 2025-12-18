@@ -18,8 +18,9 @@ imports: [
         '.env',
         '.env.local',
         '.env.example',
-        'env.example',
-      ],
+        'env.example',,
+    DemoModule
+  ],
       validate: process.env.SKIP_ENV_VALIDATION === '1' ? undefined : validateEnv,
     }),
 BleModule, P2PModule, VouchersModule, HealthModule, AuthModule, PaymentsModule],
