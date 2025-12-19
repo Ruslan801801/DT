@@ -1,0 +1,92 @@
+name: Android APK (EAS) -> GitHub Artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "eas.json build profile"
+        required: false
+        default: "preview"
+
+jobs:
+  build-android-apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install deps (workspaces)
+        run: npm install --include=dev --no-audit --no-fund
+
+      - name: Trigger EAS build (wait) + save JSON
+        working-directory: mobile
+        run: |
+          mkdir -p ../dist
+          eas build --platform android --profile "${{ inputs.profile }}" --non-interactive --json > ../dist/eas-build.json
+          echo "Saved dist/eas-build.json"
+
+      - name: Extract download URL
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const data = JSON.parse(fs.readFileSync('dist/eas-build.json','utf8'));
+          const b = Array.isArray(data) ? data[0] : data;
+
+          const url =
+            b?.artifacts?.applicationArchiveUrl ||
+            b?.artifacts?.buildUrl ||
+            b?.buildUrl;
+
+          if (!url) {
+            console.error('No download URL found in dist/eas-build.json');
+            process.exit(1);
+          }
+
+          fs.writeFileSync('dist/DOWNLOAD_URL.txt', url + '\n');
+          console.log('DOWNLOAD_URL=', url);
+          NODE
+
+      - name: Download APK (best-effort)
+        continue-on-error: true
+        run: |
+          set -eux
+          mkdir -p dist
+          echo "ok" > dist/_SMOKE.txt
+
+          URL="$(cat dist/DOWNLOAD_URL.txt)"
+          OUT="dist/DT-android.apk"
+
+          # попробуем скачать
+          curl -fL "$URL" -o "$OUT" || echo "DOWNLOAD_FAILED" > dist/DOWNLOAD_FAILED.txt
+
+          ls -la dist || true
+
+          # простая проверка на HTML вместо APK
+          if [ -f "$OUT" ] && head -c 20 "$OUT" | grep -qi "<!doctype"; then
+            echo "Looks like HTML downloaded, not APK" > dist/DOWNLOAD_FAILED.txt
+            rm -f "$OUT"
+          fi
+
+      - name: Upload artifacts (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DT-android-apk
+          path: |
+            dist/*
+          if-no-files-found: error
+
+      - name: Fail if APK missing (after upload)
+        run: |
+          test -s dist/DT-android.apk
