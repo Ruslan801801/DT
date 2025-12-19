@@ -1,0 +1,60 @@
+name: Build Android APK (EAS local)
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "EAS profile from mobile/eas.json"
+        required: true
+        default: "preview"
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ВАЖНО: без cache: npm (чтобы не ловить root lockfile ошибки)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Expo + EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install deps (mobile)
+        working-directory: mobile
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+
+      - name: Sanity check projectId
+        working-directory: mobile
+        run: node -e "const c=require('./app.json'); const id=c?.expo?.extra?.eas?.projectId; if(!id){console.error('Missing expo.extra.eas.projectId in mobile/app.json'); process.exit(1);} console.log('projectId:', id);"
+
+      - name: Build APK (local)
+        working-directory: mobile
+        env:
+          EAS_LOCAL_BUILD_ARTIFACTS_DIR: ${{ runner.temp }}/eas-artifacts
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          mkdir -p "$EAS_LOCAL_BUILD_ARTIFACTS_DIR"
+          eas build --platform android --profile "${{ inputs.profile }}" --local --non-interactive
+          echo "Artifacts in: $EAS_LOCAL_BUILD_ARTIFACTS_DIR"
+          ls -la "$EAS_LOCAL_BUILD_ARTIFACTS_DIR" || true
+          find "$EAS_LOCAL_BUILD_ARTIFACTS_DIR" -type f -name "*.apk" -maxdepth 5 -print || true
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dt-android-${{ inputs.profile }}
+          path: ${{ runner.temp }}/eas-artifacts/**
+          if-no-files-found: error
