@@ -11,10 +11,11 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      # ВАЖНО: без cache: npm (чтобы не ловить root lockfile ошибки)
+      # без cache: npm (иначе будет ругаться на отсутствие root lockfile)
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -43,18 +44,37 @@ jobs:
       - name: Build APK (local)
         working-directory: mobile
         env:
-          EAS_LOCAL_BUILD_ARTIFACTS_DIR: ${{ runner.temp }}/eas-artifacts
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EAS_LOCAL_BUILD_ARTIFACTS_DIR: ${{ runner.temp }}/eas-artifacts
         run: |
           mkdir -p "$EAS_LOCAL_BUILD_ARTIFACTS_DIR"
           eas build --platform android --profile "${{ inputs.profile }}" --local --non-interactive
-          echo "Artifacts in: $EAS_LOCAL_BUILD_ARTIFACTS_DIR"
+          echo "EAS artifacts dir:"
           ls -la "$EAS_LOCAL_BUILD_ARTIFACTS_DIR" || true
-          find "$EAS_LOCAL_BUILD_ARTIFACTS_DIR" -type f -name "*.apk" -maxdepth 5 -print || true
 
-      - name: Upload APK artifact
+      - name: Collect artifacts (apk/aab/tar.gz)
+        working-directory: mobile
+        env:
+          EAS_LOCAL_BUILD_ARTIFACTS_DIR: ${{ runner.temp }}/eas-artifacts
+        run: |
+          OUT="${{ runner.temp }}/apk-out"
+          mkdir -p "$OUT"
+
+          # 1) то, что EAS копирует в artifacts dir
+          find "$EAS_LOCAL_BUILD_ARTIFACTS_DIR" -type f \( -name "*.apk" -o -name "*.aab" -o -name "*.tar.gz" \) -print -exec cp -v {} "$OUT/" \; 2>/dev/null || true
+
+          # 2) на всякий случай ищем в проекте (иногда EAS кладёт в текущую папку)
+          find . -maxdepth 4 -type f \( -name "*.apk" -o -name "*.aab" -o -name "*.tar.gz" \) -print -exec cp -v {} "$OUT/" \; 2>/dev/null || true
+
+          echo "Collected files:"
+          ls -la "$OUT" || true
+
+          # если ничего не нашли — падаем, чтобы не было "зелёного без APK"
+          ls "$OUT"/* >/dev/null 2>&1
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: dt-android-${{ inputs.profile }}
-          path: ${{ runner.temp }}/eas-artifacts/**
+          path: ${{ runner.temp }}/apk-out/**
           if-no-files-found: error
