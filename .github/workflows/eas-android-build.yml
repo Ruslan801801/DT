@@ -1,0 +1,48 @@
+name: EAS Android build (fix project init)
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "EAS profile from mobile/eas.json"
+        required: true
+        default: "preview"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # без cache: npm (иначе у тебя снова ругань на lockfile в корне)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install deps (mobile)
+        working-directory: mobile
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+
+      - name: Ensure projectId exists in app.json
+        working-directory: mobile
+        run: |
+          node -e "const c=require('./app.json'); const id=c && c.expo && c.expo.extra && c.expo.extra.eas && c.expo.extra.eas.projectId; if(!id){console.error('Missing expo.extra.eas.projectId in mobile/app.json'); process.exit(1);} console.log('projectId:', id);"
+
+      - name: Link EAS project (non-interactive)
+        working-directory: mobile
+        run: |
+          PROJECT_ID="$(node -e "const c=require('./app.json'); console.log(c.expo.extra.eas.projectId)")"
+          eas project:init --id "$PROJECT_ID" --force --non-interactive
+
+      - name: Build Android (wait)
+        working-directory: mobile
+        env:
+          EAS_NO_VCS: "1"
+        run: |
+          eas build --platform android --profile "${{ inputs.profile }}" --non-interactive
