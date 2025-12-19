@@ -1,45 +1,88 @@
-name: Build Android APK (EAS)
+name: Android APK (EAS) -> GitHub Artifact
 
 on:
   workflow_dispatch:
     inputs:
       profile:
-        description: "EAS build profile from mobile/eas.json"
-        required: true
-        default: "preview"
+        description: EAS profile (preview/production)
+        required: false
+        default: preview
 
 jobs:
-  build-android-apk:
+  apk:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    timeout-minutes: 120
+    permissions:
+      contents: read
 
-      # ВАЖНО: без cache: npm (у вас нет корневого lockfile)
-      - uses: actions/setup-node@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # НЕ включаем cache: npm — у тебя нет root lockfile, и это ломает setup-node
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Setup EAS
+      - name: Install deps (workspaces)
+        run: npm install --include=dev --no-audit --no-fund
+
+      - name: Setup Expo + EAS
         uses: expo/expo-github-action@v8
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Install mobile deps
+      # На случай "EAS project not configured" в CI:
+      # Линкуем проект по projectId (команда не интерактивная).
+      - name: Ensure EAS project linked (non-interactive)
         working-directory: mobile
         run: |
-          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+          eas project:init --id "$(node -e "const p=require('./app.json'); console.log(p.expo?.extra?.eas?.projectId || '')")" --non-interactive || true
 
-      - name: Trigger EAS build (android apk)
+      - name: Build APK (wait + json)
         working-directory: mobile
         env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EAS_NO_VCS: "1"
         run: |
-          eas build --platform android --profile "${{ inputs.profile }}" --non-interactive --no-wait --json > ../docs/eas-build-android.json
-          echo "Build triggered. See Expo build URL in logs above (or open docs/eas-build-android.json artifact)."
+          PROFILE="${{ inputs.profile }}"
+          mkdir -p ../docs
+          eas build --platform android --profile "$PROFILE" --non-interactive --json > ../docs/eas-build-android.json
 
-      - name: Upload build metadata
+      - name: Extract APK URL
+        id: parse
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const p = 'docs/eas-build-android.json';
+          const j = JSON.parse(fs.readFileSync(p,'utf8'));
+          const b = Array.isArray(j) ? j[0] : j;
+
+          const url =
+            b?.artifacts?.buildUrl ||
+            b?.artifacts?.applicationArchiveUrl ||
+            b?.artifacts?.url;
+
+          if (!url) {
+            console.error('No artifacts URL in docs/eas-build-android.json');
+            process.exit(1);
+          }
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `url=${url}\n`);
+          console.log('APK URL:', url);
+          NODE
+
+      - name: Download APK
+        run: |
+          mkdir -p dist
+          curl -L "${{ steps.parse.outputs.url }}" -o dist/DT-preview.apk
+          ls -lah dist
+
+      - name: Upload Artifact (APK + build json)
         uses: actions/upload-artifact@v4
         with:
-          name: eas-build-android
-          path: docs/eas-build-android.json
+          name: dt-android-apk
+          path: |
+            dist/DT-preview.apk
+            docs/eas-build-android.json
