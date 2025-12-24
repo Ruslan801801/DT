@@ -3,9 +3,11 @@
   "build": {
     "preview": {
       "distribution": "internal",
+      "credentialsSource": "local",
       "android": { "buildType": "apk" }
     },
     "production": {
+      "credentialsSource": "local",
       "android": { "buildType": "app-bundle" }
     }
   }

@@ -1,19 +1,18 @@
-name: EAS Android APK
+name: Build Android APK (EAS) + Upload Artifact
 
 on:
   workflow_dispatch:
     inputs:
       profile:
-        description: "EAS profile"
+        description: "EAS build profile"
         required: true
         default: "preview"
 
 jobs:
-  build_android_apk:
+  build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -23,50 +22,73 @@ jobs:
           node-version: 20
 
       - name: Install deps (mobile)
+        shell: bash
         run: |
+          set -euo pipefail
           cd mobile
-          npm install --include=dev --no-audit --no-fund
+          if [ -f package-lock.json ]; then
+            npm ci --include=dev
+          else
+            npm install --include=dev --no-audit --no-fund
+          fi
 
-      - name: EAS build (Android APK)
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      - name: Restore local keystore for EAS (credentials.json)
+        shell: bash
         run: |
+          set -euo pipefail
           cd mobile
-          PROFILE="${{ github.event.inputs.profile }}"
-          npx --yes eas-cli@latest build --platform android --profile "$PROFILE" --non-interactive --json > ../docs/eas-build-android.json
+          mkdir -p credentials
 
-      - name: Download APK from EAS build output
+          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > credentials/release.keystore
+
+          cat > credentials.json <<EOF
+          {
+            "android": {
+              "keystore": {
+                "keystorePath": "./credentials/release.keystore",
+                "keystorePassword": "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}",
+                "keyAlias": "${{ secrets.ANDROID_KEY_ALIAS }}",
+                "keyPassword": "${{ secrets.ANDROID_KEY_PASSWORD }}"
+              }
+            }
+          }
+          EOF
+
+      - name: EAS build (Android)
+        shell: bash
         run: |
+          set -euo pipefail
+          mkdir -p docs
+          cd mobile
+          npx --yes eas-cli@latest build --platform android --profile "${{ github.event.inputs.profile }}" --non-interactive --json > ../docs/eas-build-android.json
+
+      - name: Download APK from EAS build json
+        shell: bash
+        run: |
+          set -euo pipefail
           node - <<'NODE'
           const fs = require('fs');
-          const p = 'docs/eas-build-android.json';
-          const j = JSON.parse(fs.readFileSync(p,'utf8'));
-          const build = Array.isArray(j) ? j[0] : j;
-
+          const j = JSON.parse(fs.readFileSync('docs/eas-build-android.json','utf8'));
+          const item = Array.isArray(j) ? (j[0] || {}) : j;
           const url =
-            build?.artifacts?.applicationArchiveUrl ||
-            build?.artifacts?.buildUrl ||
-            build?.applicationArchiveUrl ||
-            build?.buildUrl;
-
+            (item.artifacts && item.artifacts.applicationArchiveUrl) ||
+            (item.artifacts && item.artifacts.buildUrl) ||
+            item.applicationArchiveUrl ||
+            item.buildUrl;
           if (!url) {
-            console.error('No download URL found in:', JSON.stringify(build, null, 2));
+            console.error('No APK URL found. JSON:', JSON.stringify(item, null, 2));
             process.exit(1);
           }
+          fs.writeFileSync('docs/apk-url.txt', url + '\n');
           console.log(url);
-          fs.writeFileSync('docs/eas-build-url.txt', url + '\n');
 NODE
-          URL="$(cat docs/eas-build-url.txt)"
-          echo "URL=$URL"
-          mkdir -p dist
-          curl -L "$URL" -o dist/dt-preview.apk || curl -L "$URL" -o dist/dt-preview.apk
+          APK_URL="$(cat docs/apk-url.txt)"
+          curl -L "$APK_URL" -o docs/DT-preview.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dt-android-apk
-          path: dist/dt-preview.apk
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: eas-build-json
-          path: docs/eas-build-android.json
+          name: DT-android-apk
+          path: |
+            docs/DT-preview.apk
+            docs/eas-build-android.json
+            docs/apk-url.txt
