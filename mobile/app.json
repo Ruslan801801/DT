@@ -11,26 +11,18 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "updates": {
-      "enabled": false
-    },
-    "ios": {
-      "supportsTablet": true
-    },
+    "updates": { "enabled": false },
+    "ios": { "supportsTablet": true },
     "android": {
+      "package": "ru.deeptea.dt",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      },
-      "package": "deeptea.ru"
-    },
-    "web": {
-      "bundler": "metro"
-    },
-    "extra": {
-      "eas": {
-        "projectId": "9d15156d-eb16-474d-8288-da1e3c179ce8"
       }
+    },
+    "web": { "bundler": "metro" },
+    "extra": {
+      "eas": { "projectId": "9d15156d-eb16-474d-8288-da1e3c179ce8" }
     }
   }
 }
