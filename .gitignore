@@ -1,0 +1,6 @@
+
+# local backups / temp
+*.bak
+*.tmp
+*.log
+dist/
