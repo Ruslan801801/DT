@@ -1,0 +1,72 @@
+name: EAS Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "EAS profile"
+        required: true
+        default: "preview"
+
+jobs:
+  build_android_apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps (mobile)
+        run: |
+          cd mobile
+          npm install --include=dev --no-audit --no-fund
+
+      - name: EAS build (Android APK)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          cd mobile
+          PROFILE="${{ github.event.inputs.profile }}"
+          npx --yes eas-cli@latest build --platform android --profile "$PROFILE" --non-interactive --json > ../docs/eas-build-android.json
+
+      - name: Download APK from EAS build output
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const p = 'docs/eas-build-android.json';
+          const j = JSON.parse(fs.readFileSync(p,'utf8'));
+          const build = Array.isArray(j) ? j[0] : j;
+
+          const url =
+            build?.artifacts?.applicationArchiveUrl ||
+            build?.artifacts?.buildUrl ||
+            build?.applicationArchiveUrl ||
+            build?.buildUrl;
+
+          if (!url) {
+            console.error('No download URL found in:', JSON.stringify(build, null, 2));
+            process.exit(1);
+          }
+          console.log(url);
+          fs.writeFileSync('docs/eas-build-url.txt', url + '\n');
+NODE
+          URL="$(cat docs/eas-build-url.txt)"
+          echo "URL=$URL"
+          mkdir -p dist
+          curl -L "$URL" -o dist/dt-preview.apk || curl -L "$URL" -o dist/dt-preview.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dt-android-apk
+          path: dist/dt-preview.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eas-build-json
+          path: docs/eas-build-android.json

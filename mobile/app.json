@@ -1,7 +1,8 @@
 {
   "expo": {
     "name": "DT",
-    "slug": "dt",
+    "slug": "deeptea",
+    "owner": "rus801",
     "version": "0.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -10,21 +11,15 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "updates": {
-      "enabled": false
-    },
-    "ios": {
-      "supportsTablet": true
-    },
+    "updates": { "enabled": false },
+    "ios": { "supportsTablet": true },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       }
     },
-    "web": {
-      "bundler": "metro"
-    },
+    "web": { "bundler": "metro" },
     "extra": {
       "eas": {
         "projectId": "9d15156d-eb16-474d-8288-da1e3c179ce8"
