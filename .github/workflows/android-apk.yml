@@ -2,113 +2,66 @@ name: Android APK (EAS)
 
 on:
   workflow_dispatch:
+    inputs:
+      profile:
+        description: "EAS build profile"
+        required: true
+        default: "preview"
 
 jobs:
   build-android-apk:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Prepare dist dir
-        run: mkdir -p dist
+      - name: Install deps (mobile)
+        working-directory: mobile
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --include=dev
+          else
+            npm install --include=dev --no-audit --no-fund
+          fi
 
       - name: Install EAS CLI
         run: npm i -g eas-cli
 
-      - name: Install mobile deps
-        working-directory: mobile
-        run: |
-          if [ -f package-lock.json ]; then npm ci --include=dev; else npm install --include=dev --no-audit --no-fund; fi
-
-      - name: Restore local Android credentials (credentials.json + keystore)
-        working-directory: mobile
-        env:
-          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          node - <<'NODE'
-          const fs = require('fs');
-
-          const must = (k) => {
-            const v = process.env[k];
-            if (!v) { console.error(`Missing secret: ${k}`); process.exit(1); }
-            return v;
-          };
-
-          const b64 = must('ANDROID_KEYSTORE_B64');
-          const ksPass = must('ANDROID_KEYSTORE_PASSWORD');
-          const alias = must('ANDROID_KEY_ALIAS');
-          const keyPass = must('ANDROID_KEY_PASSWORD');
-
-          fs.mkdirSync('credentials', { recursive: true });
-
-          const ksBuf = Buffer.from(b64, 'base64');
-          if (!ksBuf.length) { console.error('Keystore decoded to empty buffer (check ANDROID_KEYSTORE_B64)'); process.exit(1); }
-          fs.writeFileSync('credentials/release.keystore', ksBuf);
-
-          const creds = {
-            android: {
-              keystore: {
-                keystorePath: "./credentials/release.keystore",
-                keystorePassword: ksPass,
-                keyAlias: alias,
-                keyPassword: keyPass
-              }
-            }
-          };
-
-          fs.writeFileSync('credentials.json', JSON.stringify(creds, null, 2));
-          console.log('OK: wrote mobile/credentials.json and mobile/credentials/release.keystore');
-          NODE
-
-      - name: Build APK on EAS (preview)
-        working-directory: mobile
+      - name: Trigger & wait EAS build
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
-          eas build --platform android --profile preview --non-interactive --json > ../dist/eas-build.json
+          set -euo pipefail
+          PROFILE="${{ github.event.inputs.profile }}"
+          mkdir -p dist
+          cd mobile
+          eas build --platform android --profile "$PROFILE" --non-interactive --json > ../dist/eas-build.json
+          cd ..
 
-      - name: Download APK from EAS result
+      - name: Extract build id
+        run: node scripts/extract-eas-build-id.js
+
+      - name: Download APK
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
-          node - <<'NODE'
-          const fs = require('fs');
-          const j = JSON.parse(fs.readFileSync('dist/eas-build.json','utf8'));
-          const b = Array.isArray(j) ? j[0] : j;
+          set -euo pipefail
+          BUILD_ID="$(cat dist/build-id.txt)"
+          echo "Downloading build id: $BUILD_ID"
+          eas build:download --id "$BUILD_ID" --platform android --non-interactive --path dist/DT.apk
 
-          // EAS может возвращать немного разные структуры
-          const url =
-            b?.artifacts?.applicationArchiveUrl ||
-            b?.build?.artifacts?.applicationArchiveUrl ||
-            b?.artifacts?.buildUrl;
-
-          if (!url) {
-            console.error('No applicationArchiveUrl found in dist/eas-build.json');
-            console.error(JSON.stringify(b, null, 2).slice(0, 2000));
-            process.exit(1);
-          }
-
-          fs.writeFileSync('dist/apk-url.txt', url);
-          console.log('APK_URL=' + url);
-          NODE
-
-          URL="$(cat dist/apk-url.txt)"
-          curl -L "$URL" -o dist/DT-preview.apk
-          ls -lah dist/DT-preview.apk
-
-      - name: Upload APK artifact
+      - name: Upload artifact (APK + build json)
         uses: actions/upload-artifact@v4
         with:
-          name: DT-preview-apk
-          path: dist/DT-preview.apk
+          name: DT-android-apk
+          path: |
+            dist/DT.apk
+            dist/eas-build.json
+
 
