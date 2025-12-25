@@ -1,4 +1,4 @@
-﻿name: Android APK (EAS)
+name: Android APK (EAS)
 
 on:
   workflow_dispatch:
@@ -6,6 +6,8 @@ on:
 jobs:
   build-android-apk:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -14,89 +16,99 @@ jobs:
         with:
           node-version: 20
 
+      - name: Prepare dist dir
+        run: mkdir -p dist
+
+      - name: Install EAS CLI
+        run: npm i -g eas-cli
+
       - name: Install mobile deps
         working-directory: mobile
         run: |
-          if [ -f package-lock.json ]; then
-            npm ci --include=dev
-          else
-            npm install --include=dev --no-audit --no-fund
-          fi
+          if [ -f package-lock.json ]; then npm ci --include=dev; else npm install --include=dev --no-audit --no-fund; fi
 
-      - name: Prepare dist
-        run: mkdir -p dist
-
-      - name: Restore local keystore + credentials.json
-        shell: bash
+      - name: Restore local Android credentials (credentials.json + keystore)
+        working-directory: mobile
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > mobile/release.keystore
-          cat > mobile/credentials.json <<EOF
-          {
-            "android": {
-              "keystore": {
-                "keystorePath": "release.keystore",
-                "keystorePassword": "$ANDROID_KEYSTORE_PASSWORD",
-                "keyAlias": "$ANDROID_KEY_ALIAS",
-                "keyPassword": "$ANDROID_KEY_PASSWORD"
-              }
-            }
-          }
-          EOF
-
-      - name: Trigger EAS build (APK)
-        shell: bash
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          set -euo pipefail
-          cd mobile
-          npx --yes eas-cli@latest build --platform android --profile preview --non-interactive --json > ../dist/eas-start.json
-          cd ..
           node - <<'NODE'
           const fs = require('fs');
-          const j = JSON.parse(fs.readFileSync('dist/eas-start.json','utf8'));
-          const b = Array.isArray(j) ? j[0] : j;
-          const id = b.id || b.buildId || (b.build && b.build.id);
-          if (!id) { console.error('No build id'); process.exit(1); }
-          fs.writeFileSync('dist/build-id.txt', String(id));
-          console.log('BUILD_ID=' + id);
+
+          const must = (k) => {
+            const v = process.env[k];
+            if (!v) { console.error(`Missing secret: ${k}`); process.exit(1); }
+            return v;
+          };
+
+          const b64 = must('ANDROID_KEYSTORE_B64');
+          const ksPass = must('ANDROID_KEYSTORE_PASSWORD');
+          const alias = must('ANDROID_KEY_ALIAS');
+          const keyPass = must('ANDROID_KEY_PASSWORD');
+
+          fs.mkdirSync('credentials', { recursive: true });
+
+          const ksBuf = Buffer.from(b64, 'base64');
+          if (!ksBuf.length) { console.error('Keystore decoded to empty buffer (check ANDROID_KEYSTORE_B64)'); process.exit(1); }
+          fs.writeFileSync('credentials/release.keystore', ksBuf);
+
+          const creds = {
+            android: {
+              keystore: {
+                keystorePath: "./credentials/release.keystore",
+                keystorePassword: ksPass,
+                keyAlias: alias,
+                keyPassword: keyPass
+              }
+            }
+          };
+
+          fs.writeFileSync('credentials.json', JSON.stringify(creds, null, 2));
+          console.log('OK: wrote mobile/credentials.json and mobile/credentials/release.keystore');
           NODE
 
-      - name: Wait build + download APK
-        shell: bash
+      - name: Build APK on EAS (preview)
+        working-directory: mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
-          set -euo pipefail
-          BUILD_ID="$(cat dist/build-id.txt)"
+          eas build --platform android --profile preview --non-interactive --json > ../dist/eas-build.json
 
-          for i in $(seq 1 120); do
-            npx --yes eas-cli@latest build:view --id "$BUILD_ID" --json > dist/eas-view.json
-            STATUS="$(node -p "require('./dist/eas-view.json').status")"
-            echo "status=$STATUS (try $i/120)"
-            if [ "$STATUS" = "finished" ]; then break; fi
-            if [ "$STATUS" = "errored" ] || [ "$STATUS" = "canceled" ]; then
-              npx --yes eas-cli@latest build:logs --id "$BUILD_ID" > dist/eas-logs.txt || true
-              exit 1
-            fi
-            sleep 30
-          done
+      - name: Download APK from EAS result
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const j = JSON.parse(fs.readFileSync('dist/eas-build.json','utf8'));
+          const b = Array.isArray(j) ? j[0] : j;
 
-          npx --yes eas-cli@latest build:download --id "$BUILD_ID" --platform android --output dist/app.apk
+          // EAS может возвращать немного разные структуры
+          const url =
+            b?.artifacts?.applicationArchiveUrl ||
+            b?.build?.artifacts?.applicationArchiveUrl ||
+            b?.artifacts?.buildUrl;
 
-      - name: Upload artifact (APK + logs)
-        if: always()
+          if (!url) {
+            console.error('No applicationArchiveUrl found in dist/eas-build.json');
+            console.error(JSON.stringify(b, null, 2).slice(0, 2000));
+            process.exit(1);
+          }
+
+          fs.writeFileSync('dist/apk-url.txt', url);
+          console.log('APK_URL=' + url);
+          NODE
+
+          URL="$(cat dist/apk-url.txt)"
+          curl -L "$URL" -o dist/DT-preview.apk
+          ls -lah dist/DT-preview.apk
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-apk
-          path: |
-            dist/app.apk
-            dist/eas-start.json
-            dist/eas-view.json
-            dist/eas-logs.txt
-            dist/build-id.txt
+          name: DT-preview-apk
+          path: dist/DT-preview.apk
+
