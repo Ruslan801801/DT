@@ -1,88 +1,107 @@
-name: Android APK (EAS) -> GitHub Artifact
+name: Build Android APK (EAS) + Upload Artifact
 
 on:
   workflow_dispatch:
     inputs:
       profile:
-        description: EAS profile (preview/production)
-        required: false
-        default: preview
+        description: "EAS build profile"
+        required: true
+        default: "preview"
 
 jobs:
-  apk:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    permissions:
-      contents: read
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # НЕ включаем cache: npm — у тебя нет root lockfile, и это ломает setup-node
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install deps (workspaces)
-        run: npm install --include=dev --no-audit --no-fund
-
-      - name: Setup Expo + EAS
-        uses: expo/expo-github-action@v8
-        with:
-          eas-version: latest
-          token: ${{ secrets.EXPO_TOKEN }}
-
-      # На случай "EAS project not configured" в CI:
-      # Линкуем проект по projectId (команда не интерактивная).
-      - name: Ensure EAS project linked (non-interactive)
-        working-directory: mobile
+      - name: Install deps (mobile)
+        shell: bash
         run: |
-          eas project:init --id "$(node -e "const p=require('./app.json'); console.log(p.expo?.extra?.eas?.projectId || '')")" --non-interactive || true
+          set -euo pipefail
+          cd mobile
+          if [ -f package-lock.json ]; then
+            npm ci --include=dev
+          else
+            npm install --include=dev --no-audit --no-fund
+          fi
 
-      - name: Build APK (wait + json)
-        working-directory: mobile
-        env:
-          EAS_NO_VCS: "1"
+      - name: Restore local Android credentials (credentials.json)
+        shell: bash
         run: |
-          PROFILE="${{ inputs.profile }}"
-          mkdir -p ../docs
-          eas build --platform android --profile "$PROFILE" --non-interactive --json > ../docs/eas-build-android.json
+          set -euo pipefail
+          cd mobile
 
-      - name: Extract APK URL
-        id: parse
+          # decode keystore from secrets into file
+          mkdir -p credentials
+          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > credentials/release.keystore
+
+          # create credentials.json in MOBILE ROOT
+          cat > credentials.json <<EOF
+          {
+            "android": {
+              "keystore": {
+                "keystorePath": "./credentials/release.keystore",
+                "keystorePassword": "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}",
+                "keyAlias": "${{ secrets.ANDROID_KEY_ALIAS }}",
+                "keyPassword": "${{ secrets.ANDROID_KEY_PASSWORD }}"
+              }
+            }
+          }
+          EOF
+
+          # sanity check (does NOT print secrets)
+          test -s credentials.json
+          test -s credentials/release.keystore
+          ls -la credentials.json credentials/release.keystore
+
+      - name: EAS build (Android) -> dist/eas-build.json
+        shell: bash
         run: |
+          set -euo pipefail
+          mkdir -p dist
+          cd mobile
+          npx --yes eas-cli@latest build \
+            --platform android \
+            --profile "${{ github.event.inputs.profile }}" \
+            --non-interactive \
+            --json > ../dist/eas-build.json
+          echo "Saved dist/eas-build.json"
+
+      - name: Download APK from EAS build json
+        shell: bash
+        run: |
+          set -euo pipefail
           node - <<'NODE'
           const fs = require('fs');
-          const p = 'docs/eas-build-android.json';
-          const j = JSON.parse(fs.readFileSync(p,'utf8'));
-          const b = Array.isArray(j) ? j[0] : j;
-
+          const j = JSON.parse(fs.readFileSync('dist/eas-build.json','utf8'));
+          const item = Array.isArray(j) ? (j[0] || {}) : j;
           const url =
-            b?.artifacts?.buildUrl ||
-            b?.artifacts?.applicationArchiveUrl ||
-            b?.artifacts?.url;
-
+            (item.artifacts && item.artifacts.applicationArchiveUrl) ||
+            item.applicationArchiveUrl ||
+            (item.artifacts && item.artifacts.buildUrl) ||
+            item.buildUrl;
           if (!url) {
-            console.error('No artifacts URL in docs/eas-build-android.json');
+            console.error('No APK URL found in dist/eas-build.json');
+            console.error(JSON.stringify(item, null, 2));
             process.exit(1);
           }
-
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `url=${url}\n`);
-          console.log('APK URL:', url);
+          fs.writeFileSync('dist/apk-url.txt', url + '\n');
+          console.log(url);
           NODE
+          APK_URL="$(cat dist/apk-url.txt)"
+          curl -L "$APK_URL" -o dist/DT-preview.apk
 
-      - name: Download APK
-        run: |
-          mkdir -p dist
-          curl -L "${{ steps.parse.outputs.url }}" -o dist/DT-preview.apk
-          ls -lah dist
-
-      - name: Upload Artifact (APK + build json)
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: dt-android-apk
+          name: DT-android-apk
           path: |
             dist/DT-preview.apk
-            docs/eas-build-android.json
+            dist/eas-build.json
+            dist/apk-url.txt
