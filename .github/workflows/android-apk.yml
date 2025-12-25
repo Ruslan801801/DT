@@ -1,107 +1,110 @@
-name: Build Android APK (EAS) + Upload Artifact
+name: Android APK (EAS)
 
 on:
   workflow_dispatch:
     inputs:
       profile:
-        description: "EAS build profile"
+        description: EAS build profile
         required: true
-        default: "preview"
+        default: preview
 
 jobs:
-  build:
+  android-apk:
     runs-on: ubuntu-latest
-    env:
-      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install deps (mobile)
-        shell: bash
+      - name: Install mobile deps
+        working-directory: mobile
         run: |
-          set -euo pipefail
-          cd mobile
           if [ -f package-lock.json ]; then
             npm ci --include=dev
           else
             npm install --include=dev --no-audit --no-fund
           fi
 
-      - name: Restore local Android credentials (credentials.json)
-        shell: bash
+      - name: Install EAS CLI
+        run: npm i -g eas-cli
+
+      - name: Prepare Android signing (local credentials.json)
+        working-directory: mobile
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          set -euo pipefail
-          cd mobile
-
-          # decode keystore from secrets into file
-          mkdir -p credentials
-          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > credentials/release.keystore
-
-          # create credentials.json in MOBILE ROOT
-          cat > credentials.json <<EOF
+          set -e
+          printf "%s" "$ANDROID_KEYSTORE_BASE64" | base64 -d > release.keystore
+          cat > credentials.json <<JSON
           {
             "android": {
               "keystore": {
-                "keystorePath": "./credentials/release.keystore",
-                "keystorePassword": "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}",
-                "keyAlias": "${{ secrets.ANDROID_KEY_ALIAS }}",
-                "keyPassword": "${{ secrets.ANDROID_KEY_PASSWORD }}"
+                "keystorePath": "release.keystore",
+                "keystorePassword": "${ANDROID_KEYSTORE_PASSWORD}",
+                "keyAlias": "${ANDROID_KEY_ALIAS}",
+                "keyPassword": "${ANDROID_KEY_PASSWORD}"
               }
             }
           }
-          EOF
+JSON
 
-          # sanity check (does NOT print secrets)
-          test -s credentials.json
-          test -s credentials/release.keystore
-          ls -la credentials.json credentials/release.keystore
-
-      - name: EAS build (Android) -> dist/eas-build.json
-        shell: bash
+      - name: Build APK on EAS (wait + json)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
-          set -euo pipefail
+          set -e
           mkdir -p dist
           cd mobile
-          npx --yes eas-cli@latest build \
-            --platform android \
-            --profile "${{ github.event.inputs.profile }}" \
-            --non-interactive \
-            --json > ../dist/eas-build.json
-          echo "Saved dist/eas-build.json"
 
-      - name: Download APK from EAS build json
-        shell: bash
+          PROFILE="${{ inputs.profile }}"
+
+          set +e
+          eas build --platform android --profile "$PROFILE" --non-interactive --wait --json > ../dist/eas-build.json
+          EAS_CODE=$?
+          set -e
+
+          echo "EAS_EXIT_CODE=$EAS_CODE" >> $GITHUB_ENV
+          echo "----- eas-build.json -----"
+          cat ../dist/eas-build.json || true
+
+          # Если build упал — всё равно оставим json артефактом, но job должен упасть
+          if [ "$EAS_CODE" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Download APK from buildUrl
         run: |
-          set -euo pipefail
-          node - <<'NODE'
+          set -e
+          URL="$(node - <<'NODE'
           const fs = require('fs');
-          const j = JSON.parse(fs.readFileSync('dist/eas-build.json','utf8'));
-          const item = Array.isArray(j) ? (j[0] || {}) : j;
-          const url =
-            (item.artifacts && item.artifacts.applicationArchiveUrl) ||
-            item.applicationArchiveUrl ||
-            (item.artifacts && item.artifacts.buildUrl) ||
-            item.buildUrl;
-          if (!url) {
-            console.error('No APK URL found in dist/eas-build.json');
-            console.error(JSON.stringify(item, null, 2));
-            process.exit(1);
-          }
-          fs.writeFileSync('dist/apk-url.txt', url + '\n');
-          console.log(url);
-          NODE
-          APK_URL="$(cat dist/apk-url.txt)"
-          curl -L "$APK_URL" -o dist/DT-preview.apk
+          const p = 'dist/eas-build.json';
+          const raw = fs.readFileSync(p,'utf8');
+          const j = JSON.parse(raw);
+          const b = Array.isArray(j) ? j[0] : j;
+          const url = (b && b.artifacts && (b.artifacts.buildUrl || b.artifacts.applicationArchiveUrl)) || '';
+          process.stdout.write(url);
+NODE
+          )"
+          if [ -z "$URL" ]; then
+            echo "No buildUrl in dist/eas-build.json"
+            exit 2
+          fi
+          echo "Downloading: $URL"
+          curl -L "$URL" -o dist/app.apk
+          ls -lh dist/app.apk
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload artifacts (APK + JSON)
+        uses: actions/upload-artifact@v4
         with:
-          name: DT-android-apk
+          name: android-apk
           path: |
-            dist/DT-preview.apk
+            dist/app.apk
             dist/eas-build.json
-            dist/apk-url.txt
