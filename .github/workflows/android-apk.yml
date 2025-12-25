@@ -1,13 +1,11 @@
-name: Android APK (EAS)
+﻿name: Android APK (EAS)
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-apk:
+  build-android-apk:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -17,17 +15,18 @@ jobs:
           node-version: 20
 
       - name: Install mobile deps
-        shell: bash
+        working-directory: mobile
         run: |
-          set -euo pipefail
-          cd mobile
           if [ -f package-lock.json ]; then
-            npm ci --include=dev --no-audit --no-fund
+            npm ci --include=dev
           else
             npm install --include=dev --no-audit --no-fund
           fi
 
-      - name: Prepare Android credentials (local)
+      - name: Prepare dist
+        run: mkdir -p dist
+
+      - name: Restore local keystore + credentials.json
         shell: bash
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -35,14 +34,8 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          set -euo pipefail
-          cd mobile
-
-          # keystore from base64
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > release.keystore
-
-          # credentials.json expected by EAS when credentialsSource=local
-          cat > credentials.json <<EOF
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > mobile/release.keystore
+          cat > mobile/credentials.json <<EOF
           {
             "android": {
               "keystore": {
@@ -55,70 +48,55 @@ jobs:
           }
           EOF
 
-      - name: Trigger EAS build (preview APK) and wait
+      - name: Trigger EAS build (APK)
         shell: bash
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p dist
           cd mobile
-
-          # ВАЖНО: --wait чтобы дождаться результата
-          npx --yes eas-cli@latest build \
-            --platform android \
-            --profile preview \
-            --non-interactive \
-            --wait \
-            --json > ../dist/eas-build.json
-
-      - name: Fetch build details (JSON)
-        shell: bash
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          set -euo pipefail
+          npx --yes eas-cli@latest build --platform android --profile preview --non-interactive --json > ../dist/eas-start.json
+          cd ..
           node - <<'NODE'
           const fs = require('fs');
-          const j = JSON.parse(fs.readFileSync('dist/eas-build.json','utf8'));
-          const id = j.id || j.buildId || (Array.isArray(j) ? j[0]?.id : undefined);
-          if (!id) { console.error('No build id in dist/eas-build.json'); process.exit(1); }
-          fs.writeFileSync('dist/build-id.txt', id + '\n');
-          console.log('BUILD_ID=', id);
+          const j = JSON.parse(fs.readFileSync('dist/eas-start.json','utf8'));
+          const b = Array.isArray(j) ? j[0] : j;
+          const id = b.id || b.buildId || (b.build && b.build.id);
+          if (!id) { console.error('No build id'); process.exit(1); }
+          fs.writeFileSync('dist/build-id.txt', String(id));
+          console.log('BUILD_ID=' + id);
           NODE
 
+      - name: Wait build + download APK
+        shell: bash
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -euo pipefail
           BUILD_ID="$(cat dist/build-id.txt)"
-          cd mobile
-          npx --yes eas-cli@latest build:view --build-id "$BUILD_ID" --json > ../dist/eas-build-view.json
 
-      - name: Download APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          node - <<'NODE'
-          const fs = require('fs');
-          const view = JSON.parse(fs.readFileSync('dist/eas-build-view.json','utf8'));
-          const a = view.artifacts || {};
-          const url = a.buildUrl || a.applicationArchiveUrl || a.apkUrl || a.downloadUrl;
-          if (!url) {
-            console.error('No APK url found in artifacts. Full artifacts:', JSON.stringify(a,null,2));
-            process.exit(1);
-          }
-          fs.writeFileSync('dist/apk-url.txt', url + '\n');
-          console.log('APK_URL=', url);
-          NODE
+          for i in $(seq 1 120); do
+            npx --yes eas-cli@latest build:view --id "$BUILD_ID" --json > dist/eas-view.json
+            STATUS="$(node -p "require('./dist/eas-view.json').status")"
+            echo "status=$STATUS (try $i/120)"
+            if [ "$STATUS" = "finished" ]; then break; fi
+            if [ "$STATUS" = "errored" ] || [ "$STATUS" = "canceled" ]; then
+              npx --yes eas-cli@latest build:logs --id "$BUILD_ID" > dist/eas-logs.txt || true
+              exit 1
+            fi
+            sleep 30
+          done
 
-          URL="$(cat dist/apk-url.txt)"
-          curl -L "$URL" -o dist/DT-preview.apk
-          ls -lah dist
+          npx --yes eas-cli@latest build:download --id "$BUILD_ID" --platform android --output dist/app.apk
 
-      - name: Upload artifacts
+      - name: Upload artifact (APK + logs)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: DT-preview-apk
+          name: android-apk
           path: |
-            dist/DT-preview.apk
-            dist/eas-build.json
-            dist/eas-build-view.json
+            dist/app.apk
+            dist/eas-start.json
+            dist/eas-view.json
+            dist/eas-logs.txt
             dist/build-id.txt
-            dist/apk-url.txt
