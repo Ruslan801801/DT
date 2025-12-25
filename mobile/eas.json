@@ -6,14 +6,12 @@
   "build": {
     "preview": {
       "distribution": "internal",
-      "android": {
-        "buildType": "apk"
-      }
+      "credentialsSource": "local",
+      "android": { "buildType": "apk" }
     },
     "production": {
-      "android": {
-        "buildType": "app-bundle"
-      }
+      "credentialsSource": "local",
+      "android": { "buildType": "app-bundle" }
     }
   }
 }
