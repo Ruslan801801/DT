@@ -4,3 +4,7 @@
 *.tmp
 *.log
 dist/
+
+# EAS local Android credentials (DO NOT COMMIT)
+mobile/credentials.json
+mobile/credentials/
