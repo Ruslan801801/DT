@@ -11,18 +11,27 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "updates": { "enabled": false },
-    "ios": { "supportsTablet": true },
+    "updates": {
+      "enabled": false
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ru.deeptea.app"
+    },
     "android": {
-      "package": "ru.deeptea.dt",
+      "package": "ru.deeptea.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       }
     },
-    "web": { "bundler": "metro" },
+    "web": {
+      "bundler": "metro"
+    },
     "extra": {
-      "eas": { "projectId": "9d15156d-eb16-474d-8288-da1e3c179ce8" }
+      "eas": {
+        "projectId": "9d15156d-eb16-474d-8288-da1e3c179ce8"
+      }
     }
   }
 }
