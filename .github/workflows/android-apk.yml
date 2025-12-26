@@ -3,10 +3,22 @@ name: Android APK (EAS)
 on:
   workflow_dispatch:
 
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-apk:
+  build_apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    permissions:
+      contents: read
+
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v4
@@ -17,18 +29,22 @@ jobs:
 
       - name: Install deps (mobile)
         working-directory: mobile
-        run: npm install --include=dev --no-audit --no-fund --legacy-peer-deps
+        run: |
+          set -e
+          if [ -f package-lock.json ]; then
+            npm ci --include=dev
+          else
+            npm install --include=dev --no-audit --no-fund --legacy-peer-deps
+          fi
 
-      - name: Prepare Android keystore + credentials.json (local)
+      - name: Prepare Android credentials (local)
         working-directory: mobile
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+
+          # Проверяем что секрет реально пришел
           test -n "${ANDROID_KEYSTORE_BASE64}"
+
           echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > release.keystore
 
           cat > credentials.json <<EOF
@@ -46,44 +62,66 @@ jobs:
 
           chmod 600 release.keystore credentials.json
 
-      - name: EAS build (Android APK) + download artifact
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      - name: EAS Build (APK) and save json
         run: |
           set -euo pipefail
           mkdir -p dist
-
           cd mobile
           npx --yes eas-cli@latest build \
             --platform android \
             --profile preview \
             --non-interactive \
-            --json > ../dist/eas-start.json
+            --json > ../dist/eas-build.json
           cd ..
+
+      - name: Download APK from EAS artifact URL
+        run: |
+          set -euo pipefail
 
           node - <<'NODE'
           const fs = require('fs');
-          const j = JSON.parse(fs.readFileSync('dist/eas-start.json','utf8'));
+
+          const raw = fs.readFileSync('dist/eas-build.json','utf8').trim();
+          if (!raw) {
+            console.error('dist/eas-build.json is empty (EAS build failed before JSON output).');
+            process.exit(1);
+          }
+
+          const j = JSON.parse(raw);
           const b = Array.isArray(j) ? j[0] : j;
-          const id = b.id || b.buildId || (b.build && b.build.id);
-          if (!id) { console.error('No build id in eas-start.json'); process.exit(1); }
-          fs.writeFileSync('dist/build-id.txt', String(id));
-          console.log('BUILD_ID=' + id);
+
+          const url = b?.artifacts?.applicationArchiveUrl;
+          if (!url) {
+            console.error('No artifacts.applicationArchiveUrl in eas-build.json. Got keys:', Object.keys(b || {}));
+            console.error('Hint: do NOT use buildUrl; it is a web page, not the APK file.');
+            process.exit(1);
+          }
+
+          fs.writeFileSync('dist/apk-url.txt', url + '\n');
+          console.log('APK_URL=' + url);
           NODE
 
-          cd mobile
-          npx --yes eas-cli@latest build:download \
-            --platform android \
-            --id "$(cat ../dist/build-id.txt)" \
-            --output ../dist/DT-preview.apk \
-            --non-interactive
+          URL="$(cat dist/apk-url.txt)"
+          curl -L "$URL" -o dist/DT-preview.apk
 
-      - name: Upload artifacts
-        if: always()
+          # APK — это zip, первые 2 байта обычно "PK"
+          python - <<'PY'
+          import sys
+          p='dist/DT-preview.apk'
+          with open(p,'rb') as f:
+            magic=f.read(2)
+          if magic != b'PK':
+            print('Downloaded file is not an APK (zip). First bytes:', magic)
+            sys.exit(1)
+          print('OK: looks like an APK:', p)
+          PY
+
+      - name: Upload artifact (APK)
         uses: actions/upload-artifact@v4
         with:
           name: DT-android-apk
           path: |
             dist/DT-preview.apk
-            dist/eas-start.json
-            dist/build-id.txt
+            dist/eas-build.json
+            dist/apk-url.txt
+          retention-days: 7
