@@ -2,49 +2,42 @@ name: Android APK (EAS)
 
 on:
   workflow_dispatch:
-
-concurrency:
-  group: android-apk-${{ github.ref }}
-  cancel-in-progress: true
+  # хочешь автоматом на теги:
+  # push:
+  #   tags: ["v*"]
 
 jobs:
-  build_apk:
+  build-android-apk:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
-    env:
-      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
+          # cache НЕ включаем, пока нет стабильного lockfile на root и пока ловим битые deps
 
-      - name: Install deps (mobile)
-        working-directory: mobile
-        run: |
-          set -e
-          if [ -f package-lock.json ]; then
-            npm ci --include=dev
-          else
-            npm install --include=dev --no-audit --no-fund --legacy-peer-deps
-          fi
-
-      - name: Prepare Android credentials (local)
-        working-directory: mobile
+      - name: Install deps (root workspaces)
+        shell: bash
         run: |
           set -euo pipefail
+          npm cache clean --force || true
+          npm install --include=dev --no-audit --no-fund --legacy-peer-deps
 
-          # Проверяем что секрет реально пришел
+      - name: Restore local Android credentials into mobile/
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
           test -n "${ANDROID_KEYSTORE_BASE64}"
 
+          cd mobile
           echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > release.keystore
 
           cat > credentials.json <<EOF
@@ -62,59 +55,53 @@ jobs:
 
           chmod 600 release.keystore credentials.json
 
-      - name: EAS Build (APK) and save json
+      - name: EAS build (Android preview APK)
+        shell: bash
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p dist
           cd mobile
-          npx --yes eas-cli@latest build \
+
+          # Пин версии помогает избежать сюрпризов
+          npx --yes eas-cli@16.28.0 build \
             --platform android \
             --profile preview \
             --non-interactive \
             --json > ../dist/eas-build.json
-          cd ..
 
-      - name: Download APK from EAS artifact URL
-        run: |
-          set -euo pipefail
+          cd ..
 
           node - <<'NODE'
           const fs = require('fs');
-
-          const raw = fs.readFileSync('dist/eas-build.json','utf8').trim();
-          if (!raw) {
-            console.error('dist/eas-build.json is empty (EAS build failed before JSON output).');
-            process.exit(1);
-          }
-
-          const j = JSON.parse(raw);
+          const txt = fs.readFileSync('dist/eas-build.json','utf8').trim();
+          if (!txt) { console.error('eas-build.json is empty'); process.exit(1); }
+          const j = JSON.parse(txt);
           const b = Array.isArray(j) ? j[0] : j;
-
-          const url = b?.artifacts?.applicationArchiveUrl;
-          if (!url) {
-            console.error('No artifacts.applicationArchiveUrl in eas-build.json. Got keys:', Object.keys(b || {}));
-            console.error('Hint: do NOT use buildUrl; it is a web page, not the APK file.');
-            process.exit(1);
-          }
-
-          fs.writeFileSync('dist/apk-url.txt', url + '\n');
-          console.log('APK_URL=' + url);
+          const id = b.id || b.buildId || (b.build && b.build.id);
+          if (!id) { console.error('No build id in JSON'); process.exit(1); }
+          fs.writeFileSync('dist/build-id.txt', String(id));
+          console.log('BUILD_ID=' + id);
           NODE
 
-          URL="$(cat dist/apk-url.txt)"
-          curl -L "$URL" -o dist/DT-preview.apk
+      - name: Download APK from EAS
+        shell: bash
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          BUILD_ID="$(cat dist/build-id.txt)"
+          # Скачиваем прямо через EAS CLI (стабильнее чем выковыривать URL)
+          npx --yes eas-cli@16.28.0 build:download \
+            --platform android \
+            --id "$BUILD_ID" \
+            --output dist/DT-preview.apk \
+            --non-interactive
 
-          # APK — это zip, первые 2 байта обычно "PK"
-          python - <<'PY'
-          import sys
-          p='dist/DT-preview.apk'
-          with open(p,'rb') as f:
-            magic=f.read(2)
-          if magic != b'PK':
-            print('Downloaded file is not an APK (zip). First bytes:', magic)
-            sys.exit(1)
-          print('OK: looks like an APK:', p)
-          PY
+          ls -lah dist/DT-preview.apk
+          # простая защита от "пустого" файла
+          test "$(stat -c%s dist/DT-preview.apk)" -gt 1000000
 
       - name: Upload artifact (APK)
         uses: actions/upload-artifact@v4
@@ -123,5 +110,4 @@ jobs:
           path: |
             dist/DT-preview.apk
             dist/eas-build.json
-            dist/apk-url.txt
-          retention-days: 7
+            dist/build-id.txt
