@@ -2,66 +2,88 @@ name: Android APK (EAS)
 
 on:
   workflow_dispatch:
-    inputs:
-      profile:
-        description: "EAS build profile"
-        required: true
-        default: "preview"
 
 jobs:
-  build-android-apk:
+  build-apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: Install deps (mobile)
         working-directory: mobile
+        run: npm install --include=dev --no-audit --no-fund --legacy-peer-deps
+
+      - name: Prepare Android keystore + credentials.json (local)
+        working-directory: mobile
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -f package-lock.json ]; then
-            npm ci --include=dev
-          else
-            npm install --include=dev --no-audit --no-fund
-          fi
+          set -euo pipefail
+          test -n "${ANDROID_KEYSTORE_BASE64}"
+          echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > release.keystore
 
-      - name: Install EAS CLI
-        run: npm i -g eas-cli
+          cat > credentials.json <<EOF
+          {
+            "android": {
+              "keystore": {
+                "keystorePath": "release.keystore",
+                "keystorePassword": "${ANDROID_KEYSTORE_PASSWORD}",
+                "keyAlias": "${ANDROID_KEY_ALIAS}",
+                "keyPassword": "${ANDROID_KEY_PASSWORD}"
+              }
+            }
+          }
+          EOF
 
-      - name: Trigger & wait EAS build
+          chmod 600 release.keystore credentials.json
+
+      - name: EAS build (Android APK) + download artifact
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           set -euo pipefail
-          PROFILE="${{ github.event.inputs.profile }}"
           mkdir -p dist
+
           cd mobile
-          eas build --platform android --profile "$PROFILE" --non-interactive --json > ../dist/eas-build.json
+          npx --yes eas-cli@latest build \
+            --platform android \
+            --profile preview \
+            --non-interactive \
+            --json > ../dist/eas-start.json
           cd ..
 
-      - name: Extract build id
-        run: node scripts/extract-eas-build-id.js
+          node - <<'NODE'
+          const fs = require('fs');
+          const j = JSON.parse(fs.readFileSync('dist/eas-start.json','utf8'));
+          const b = Array.isArray(j) ? j[0] : j;
+          const id = b.id || b.buildId || (b.build && b.build.id);
+          if (!id) { console.error('No build id in eas-start.json'); process.exit(1); }
+          fs.writeFileSync('dist/build-id.txt', String(id));
+          console.log('BUILD_ID=' + id);
+          NODE
 
-      - name: Download APK
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          set -euo pipefail
-          BUILD_ID="$(cat dist/build-id.txt)"
-          echo "Downloading build id: $BUILD_ID"
-          eas build:download --id "$BUILD_ID" --platform android --non-interactive --path dist/DT.apk
+          cd mobile
+          npx --yes eas-cli@latest build:download \
+            --platform android \
+            --id "$(cat ../dist/build-id.txt)" \
+            --output ../dist/DT-preview.apk \
+            --non-interactive
 
-      - name: Upload artifact (APK + build json)
+      - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: DT-android-apk
           path: |
-            dist/DT.apk
-            dist/eas-build.json
-
-
+            dist/DT-preview.apk
+            dist/eas-start.json
+            dist/build-id.txt
