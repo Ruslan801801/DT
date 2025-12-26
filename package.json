@@ -1,29 +1,32 @@
 {
-"name": "deeptea-mono",
-"private": true,
-"workspaces": [
-"mobile",
-"native",
-"server",
-"shared"
-],
-"scripts": {
-"dev:mobile": "yarn workspace mobile start",
-"dev:server": "yarn workspace server start:dev",
-"build:mobile": "yarn workspace mobile build",
-"build:server": "yarn workspace server build",
-"test:mobile": "yarn workspace mobile test",
-"test:server": "yarn workspace server test",
-"lint": "yarn workspaces run lint",
-"type-check": "yarn workspaces run type-check",
-"docker:dev": "docker-compose up -d",
-"docker:prod": "docker-compose -f infra/docker-compose.prod.yml up -d"
-},
-"devDependencies": {
-"typescript": "^5.6.2",
-"@typescript-eslint/eslint-plugin": "^7.15.0",
-"@typescript-eslint/parser": "^7.15.0",
-"eslint": "^8.57.0",
-"lerna": "^7.4.2"
-}
+  "name": "deeptea-mono",
+  "private": true,
+  "workspaces": [
+    "mobile",
+    "native",
+    "server",
+    "shared"
+  ],
+  "scripts": {
+    "dev:mobile": "yarn workspace mobile start",
+    "dev:server": "yarn workspace server start:dev",
+    "build:mobile": "yarn workspace mobile build",
+    "build:server": "yarn workspace server build",
+    "test:mobile": "yarn workspace mobile test",
+    "test:server": "yarn workspace server test",
+    "lint": "yarn workspaces run lint",
+    "type-check": "yarn workspaces run type-check",
+    "docker:dev": "docker-compose up -d",
+    "docker:prod": "docker-compose -f infra/docker-compose.prod.yml up -d"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.2",
+    "@typescript-eslint/eslint-plugin": "^7.15.0",
+    "@typescript-eslint/parser": "^7.15.0",
+    "eslint": "^8.57.0",
+    "lerna": "^7.4.2"
+  },
+  "overrides": {
+    "@types/react": "19.2.7"
+  }
 }
