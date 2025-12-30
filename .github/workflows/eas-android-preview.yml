@@ -3,10 +3,9 @@ name: EAS Android Preview
 on:
   workflow_dispatch:
   push:
-    branches: [ "main", "develop" ]
+    branches: [main]
     paths:
       - "mobile/**"
-      - "eas.json"
       - ".github/workflows/eas-android-preview.yml"
 
 concurrency:
@@ -14,86 +13,109 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build_android_preview:
+  build:
+    name: Build (Android / preview)
     runs-on: ubuntu-latest
     permissions:
       contents: read
 
-    env:
-      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-
     steps:
       - name: Check EXPO_TOKEN
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           if [ -z "${EXPO_TOKEN}" ]; then
-            echo "❌ Missing EXPO_TOKEN secret (Settings → Secrets and variables → Actions)."
+            echo "❌ Missing EXPO_TOKEN secret"
             exit 1
           fi
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 18
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mobile/package-lock.json
 
-      - name: Cleanup node_modules (in case they are committed or broken)
-        run: |
-          rm -rf node_modules mobile/node_modules || true
-
-      - name: Setup EAS
+      - name: Setup Expo + EAS CLI
         uses: expo/expo-github-action@v8
         with:
           eas-version: 16.28.0
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Install dependencies (smart)
-        shell: bash
+      - name: Install deps (root, if needed)
         run: |
           set -euo pipefail
-
-          # 1) Install at repo root if lockfile exists (monorepo/workspaces friendly)
-          if [ -f yarn.lock ]; then
-            corepack enable || true
-            yarn --version
-            yarn install --frozen-lockfile
-          elif [ -f package-lock.json ]; then
+          if [ -f package-lock.json ]; then
             npm ci
-          elif [ -f pnpm-lock.yaml ]; then
-            corepack enable || true
-            pnpm --version
-            pnpm install --frozen-lockfile
           else
-            echo "No lockfile at root -> skipping root install"
+            echo "No root package-lock.json — skipping root npm ci"
           fi
 
-          # 2) Install in mobile (if it is standalone OR has its own lockfile)
-          if [ -f mobile/package.json ]; then
-            if [ -f mobile/yarn.lock ]; then
-              corepack enable || true
-              (cd mobile && yarn install --frozen-lockfile)
-            elif [ -f mobile/package-lock.json ]; then
-              (cd mobile && npm ci)
-            else
-              # fallback only if mobile/node_modules is still missing
-              if [ ! -d mobile/node_modules ]; then
-                (cd mobile && npm install)
-              fi
-            fi
+      - name: Install deps (mobile)
+        working-directory: mobile
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ]; then
+            npm ci
           else
-            echo "❌ mobile/package.json not found"
+            npm install
+          fi
+          npx expo --version
+          npx expo config --json > /tmp/expo-config.json
+
+      - name: Create mobile/credentials.json (for credentialsSource=local)
+        working-directory: mobile
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "❌ Missing ANDROID_KEYSTORE_BASE64 secret (local credentials mode needs it)."
             exit 1
           fi
 
-      - name: Validate Expo config (debug)
-        run: |
-          cd mobile
-          # this must work now; otherwise EAS will fallback and часто ломается дальше
-          npx --yes expo config --json > /dev/null
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
 
-      - name: Trigger EAS build (android preview)
-        shell: bash
+          const b64 = process.env.ANDROID_KEYSTORE_BASE64;
+          const storePassword = process.env.ANDROID_KEYSTORE_PASSWORD || '';
+          const keyAlias = process.env.ANDROID_KEY_ALIAS || '';
+          const keyPassword = process.env.ANDROID_KEY_PASSWORD || storePassword;
+
+          if (!b64 || !storePassword || !keyAlias) {
+            console.error("Missing one of: ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS");
+            process.exit(1);
+          }
+
+          fs.mkdirSync('credentials', { recursive: true });
+          const jksPath = path.join('credentials', 'android-upload.jks');
+          fs.writeFileSync(jksPath, Buffer.from(b64, 'base64'));
+
+          const credentials = {
+            android: {
+              keystore: {
+                keystorePath: "./credentials/android-upload.jks",
+                keystorePassword: storePassword,
+                keyAlias,
+                keyPassword
+              }
+            }
+          };
+
+          fs.writeFileSync('credentials.json', JSON.stringify(credentials, null, 2));
+          console.log("✅ Wrote mobile/credentials.json and mobile/credentials/android-upload.jks");
+          NODE
+
+      - name: Trigger EAS Build (Android preview)
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -107,7 +129,6 @@ jobs:
             --no-wait > ../dist/eas-build.json
 
           cd ..
-
           node - <<'NODE'
           const fs = require('fs');
           const txt = fs.readFileSync('dist/eas-build.json','utf8').trim();
@@ -123,7 +144,5 @@ jobs:
       - name: Upload metadata
         uses: actions/upload-artifact@v4
         with:
-          name: eas-android-preview
-          path: |
-            dist/eas-build.json
-            dist/build-id.txt
+          name: eas-android-preview-meta
+          path: dist/
