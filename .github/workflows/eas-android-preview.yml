@@ -1,4 +1,4 @@
-name: eas-android-preview
+name: EAS Android Preview
 
 on:
   workflow_dispatch:
@@ -6,56 +6,47 @@ on:
     branches: [ "main" ]
     paths:
       - "mobile/**"
+      - "shared/**"
+      - "native/**"
       - ".github/workflows/eas-android-preview.yml"
 
-jobs:
-  build_android_preview:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
+permissions:
+  contents: read
 
-    env:
-      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+jobs:
+  build-android-preview:
+    runs-on: ubuntu-latest
 
     steps:
       - name: Check EXPO_TOKEN
         run: |
-          if [ -z "${EXPO_TOKEN}" ]; then
-            echo "❌ EXPO_TOKEN secret is missing. Add it in GitHub repo Settings → Secrets → Actions."
+          if [ -z "${{ secrets.EXPO_TOKEN }}" ]; then
+            echo "❌ EXPO_TOKEN secret is missing. Add it in repo Settings -> Secrets and variables -> Actions."
             exit 1
           fi
 
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
-      # Если node_modules случайно закоммичен/лежит в репо — убираем, чтобы не ловить битые модули
-      - name: Clean node_modules
-        run: rm -rf node_modules mobile/node_modules
-
+      # Node 20 — наиболее совместимый вариант для RN/Expo сейчас
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: |
-            mobile/package-lock.json
 
       - name: Setup EAS
         uses: expo/expo-github-action@v8
         with:
           eas-version: 16.28.0
           token: ${{ secrets.EXPO_TOKEN }}
-          packager: npm
 
-      - name: Install dependencies (mobile)
+      - name: Install mobile deps
         working-directory: mobile
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
-      - name: Validate expo config (optional but useful)
-        working-directory: mobile
-        run: npx expo config --json > /dev/null
-
-      - name: Trigger EAS Build (Android preview)
+      - name: Trigger EAS build (Android / preview)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -71,18 +62,34 @@ jobs:
 
           node - <<'NODE'
           const fs = require('fs');
+
           const txt = fs.readFileSync('dist/eas-build.json','utf8').trim();
           if (!txt) { console.error('eas-build.json is empty'); process.exit(1); }
+
           const j = JSON.parse(txt);
           const b = Array.isArray(j) ? j[0] : j;
-          const id = b.id || b.buildId || (b.build && b.build.id);
+
+          const id =
+            b.id ||
+            b.buildId ||
+            (b.build && (b.build.id || b.build.buildId));
+
+          const url =
+            b.buildDetailsPageUrl ||
+            b.detailsPageUrl ||
+            b.buildUrl ||
+            (b.build && (b.build.detailsPageUrl || b.build.buildDetailsPageUrl));
+
           if (!id) { console.error('No build id in JSON'); process.exit(1); }
+
           fs.writeFileSync('dist/build-id.txt', String(id));
-          console.log('✅ BUILD_ID=' + id);
+          console.log('BUILD_ID=' + id);
+          if (url) console.log('BUILD_URL=' + url);
           NODE
 
-      - name: Upload dist artifacts
+      - name: Upload build metadata
         uses: actions/upload-artifact@v4
         with:
           name: eas-android-preview
-          path: dist/
+          path: dist/*
+          if-no-files-found: error
