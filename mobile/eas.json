@@ -1,10 +1,14 @@
 {
-  "cli": { "version": ">= 16.28.0" },
+  "cli": {
+    "version": ">=16.28.0"
+  },
   "build": {
     "preview": {
       "distribution": "internal",
       "credentialsSource": "remote",
-      "android": { "buildType": "apk" }
+      "android": {
+        "buildType": "apk"
+      }
     }
   }
 }
