@@ -1,95 +1,152 @@
-name: EAS Android Preview
+name: EAS Android Preview (APK)
 
 on:
   workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
     paths:
       - "mobile/**"
-      - "shared/**"
-      - "native/**"
       - ".github/workflows/eas-android-preview.yml"
 
-permissions:
-  contents: read
+concurrency:
+  group: eas-android-preview-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-android-preview:
+  build-android-apk:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check EXPO_TOKEN
-        run: |
-          if [ -z "${{ secrets.EXPO_TOKEN }}" ]; then
-            echo "❌ EXPO_TOKEN secret is missing. Add it in repo Settings -> Secrets and variables -> Actions."
-            exit 1
-          fi
-
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Node 20 — наиболее совместимый вариант для RN/Expo сейчас
-      - name: Setup Node
-        uses: actions/setup-node@v6
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Setup EAS
+      - name: Setup Expo & EAS
         uses: expo/expo-github-action@v8
         with:
           eas-version: 16.28.0
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Install mobile deps
+      - name: Install dependencies (mobile)
         working-directory: mobile
-        run: npm install --no-audit --no-fund
-
-      - name: Trigger EAS build (Android / preview)
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p dist
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
 
-          cd mobile
+      - name: Validate Expo config (mobile)
+        working-directory: mobile
+        run: |
+          set -euo pipefail
+          npx expo config --json >/dev/null
+
+      - name: Start EAS build (no-wait) + save BUILD_ID
+        id: start
+        working-directory: mobile
+        run: |
+          set -euo pipefail
+          mkdir -p ../dist
+
           eas build \
             --platform android \
             --profile preview \
             --non-interactive \
             --json \
             --no-wait > ../dist/eas-build.json
-          cd ..
 
           node - <<'NODE'
           const fs = require('fs');
 
-          const txt = fs.readFileSync('dist/eas-build.json','utf8').trim();
+          const txt = fs.readFileSync('../dist/eas-build.json','utf8').trim();
           if (!txt) { console.error('eas-build.json is empty'); process.exit(1); }
 
           const j = JSON.parse(txt);
           const b = Array.isArray(j) ? j[0] : j;
 
-          const id =
-            b.id ||
-            b.buildId ||
-            (b.build && (b.build.id || b.build.buildId));
-
-          const url =
-            b.buildDetailsPageUrl ||
-            b.detailsPageUrl ||
-            b.buildUrl ||
-            (b.build && (b.build.detailsPageUrl || b.build.buildDetailsPageUrl));
-
+          const id = b.id || b.buildId || (b.build && b.build.id);
           if (!id) { console.error('No build id in JSON'); process.exit(1); }
 
-          fs.writeFileSync('dist/build-id.txt', String(id));
-          console.log('BUILD_ID=' + id);
-          if (url) console.log('BUILD_URL=' + url);
+          fs.writeFileSync('../dist/build-id.txt', String(id));
+          process.stdout.write(`Build queued. BUILD_ID=${id}\n`);
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `build_id=${id}\n`);
           NODE
 
-      - name: Upload build metadata
+      - name: Wait for build to finish + fetch artifact URL
+        working-directory: mobile
+        run: |
+          set -euo pipefail
+          BUILD_ID="${{ steps.start.outputs.build_id }}"
+          echo "Waiting for EAS build: $BUILD_ID"
+
+          # up to ~60 minutes (180 * 20s)
+          for i in $(seq 1 180); do
+            eas build:view "$BUILD_ID" --json > ../dist/build-view.json
+
+            node - <<'NODE'
+            const fs = require('fs');
+            const b = JSON.parse(fs.readFileSync('../dist/build-view.json','utf8'));
+
+            const status = String(b.status || '').toUpperCase();
+            const artifacts = b.artifacts || {};
+
+            // в разных версиях может отличаться ключ
+            const url =
+              artifacts.buildUrl ||
+              artifacts.applicationArchiveUrl ||
+              artifacts.apkUrl ||
+              artifacts.url ||
+              null;
+
+            console.log(`STATUS=${status}`);
+            if (status === 'FINISHED' && url) {
+              fs.writeFileSync('../dist/artifact-url.txt', url);
+              process.exit(0);
+            }
+            if (['ERRORED','CANCELED'].includes(status)) {
+              console.error('Build failed with status: ' + status);
+              process.exit(2);
+            }
+            process.exit(1);
+            NODE
+
+            rc=$?
+            if [ "$rc" = "0" ]; then
+              echo "Build finished."
+              break
+            fi
+            if [ "$rc" = "2" ]; then
+              echo "Build failed. See build-view.json."
+              exit 1
+            fi
+
+            sleep 20
+          done
+
+          test -f ../dist/artifact-url.txt
+
+      - name: Download APK
+        run: |
+          set -euo pipefail
+          URL="$(cat dist/artifact-url.txt)"
+          echo "Downloading APK: $URL"
+          curl -L "$URL" -o dist/app-preview.apk
+          ls -lah dist/app-preview.apk
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: eas-android-preview
-          path: dist/*
-          if-no-files-found: error
+          name: android-preview-apk
+          path: |
+            dist/app-preview.apk
+            dist/build-id.txt
+            dist/eas-build.json
+            dist/build-view.json
+            dist/artifact-url.txt
