@@ -1,0 +1,62 @@
+name: EAS Android Preview
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "mobile/**"
+      - ".github/workflows/eas-android-preview.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      CI: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install deps (mobile)
+        working-directory: mobile
+        run: npm ci
+
+      - name: Sanity: expo config
+        working-directory: mobile
+        run: npx expo config --json > /tmp/expo-config.json
+
+      - name: EAS build (android preview)
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cd mobile
+
+          npx --yes eas-cli@16.28.0 build \
+            --platform android \
+            --profile preview \
+            --non-interactive \
+            --json > ../dist/eas-build.json
+
+          cd ..
+          node - <<'NODE'
+          const fs = require('fs');
+          const txt = fs.readFileSync('dist/eas-build.json','utf8').trim();
+          if (!txt) { console.error('eas-build.json is empty'); process.exit(1); }
+          const j = JSON.parse(txt);
+          const b = Array.isArray(j) ? j[0] : j;
+          const id = b.id || b.buildId || (b.build && b.build.id);
+          if (!id) { console.error('No build id in JSON'); process.exit(1); }
+          fs.writeFileSync('dist/build-id.txt', String(id));
+          console.log('BUILD_ID=' + id);
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eas-build-metadata
+          path: dist/
