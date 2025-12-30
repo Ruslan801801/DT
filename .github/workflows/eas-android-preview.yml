@@ -1,134 +1,74 @@
-name: EAS Android Preview
+name: eas-android-preview
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [ "main" ]
     paths:
       - "mobile/**"
       - ".github/workflows/eas-android-preview.yml"
 
-concurrency:
-  group: eas-android-preview-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  build:
-    name: Build (Android / preview)
+  build_android_preview:
     runs-on: ubuntu-latest
     permissions:
       contents: read
 
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
     steps:
       - name: Check EXPO_TOKEN
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           if [ -z "${EXPO_TOKEN}" ]; then
-            echo "❌ Missing EXPO_TOKEN secret"
+            echo "❌ EXPO_TOKEN secret is missing. Add it in GitHub repo Settings → Secrets → Actions."
             exit 1
           fi
 
       - name: Checkout
         uses: actions/checkout@v5
 
+      # Если node_modules случайно закоммичен/лежит в репо — убираем, чтобы не ловить битые модули
+      - name: Clean node_modules
+        run: rm -rf node_modules mobile/node_modules
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 20
           cache: npm
           cache-dependency-path: |
-            package-lock.json
             mobile/package-lock.json
 
-      - name: Setup Expo + EAS CLI
+      - name: Setup EAS
         uses: expo/expo-github-action@v8
         with:
           eas-version: 16.28.0
           token: ${{ secrets.EXPO_TOKEN }}
+          packager: npm
 
-      - name: Install deps (root, if needed)
-        run: |
-          set -euo pipefail
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            echo "No root package-lock.json — skipping root npm ci"
-          fi
-
-      - name: Install deps (mobile)
+      - name: Install dependencies (mobile)
         working-directory: mobile
-        run: |
-          set -euo pipefail
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
-          npx expo --version
-          npx expo config --json > /tmp/expo-config.json
+        run: npm ci
 
-      - name: Create mobile/credentials.json (for credentialsSource=local)
+      - name: Validate expo config (optional but useful)
         working-directory: mobile
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
-            echo "❌ Missing ANDROID_KEYSTORE_BASE64 secret (local credentials mode needs it)."
-            exit 1
-          fi
-
-          node - <<'NODE'
-          const fs = require('fs');
-          const path = require('path');
-
-          const b64 = process.env.ANDROID_KEYSTORE_BASE64;
-          const storePassword = process.env.ANDROID_KEYSTORE_PASSWORD || '';
-          const keyAlias = process.env.ANDROID_KEY_ALIAS || '';
-          const keyPassword = process.env.ANDROID_KEY_PASSWORD || storePassword;
-
-          if (!b64 || !storePassword || !keyAlias) {
-            console.error("Missing one of: ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS");
-            process.exit(1);
-          }
-
-          fs.mkdirSync('credentials', { recursive: true });
-          const jksPath = path.join('credentials', 'android-upload.jks');
-          fs.writeFileSync(jksPath, Buffer.from(b64, 'base64'));
-
-          const credentials = {
-            android: {
-              keystore: {
-                keystorePath: "./credentials/android-upload.jks",
-                keystorePassword: storePassword,
-                keyAlias,
-                keyPassword
-              }
-            }
-          };
-
-          fs.writeFileSync('credentials.json', JSON.stringify(credentials, null, 2));
-          console.log("✅ Wrote mobile/credentials.json and mobile/credentials/android-upload.jks");
-          NODE
+        run: npx expo config --json > /dev/null
 
       - name: Trigger EAS Build (Android preview)
         run: |
           set -euo pipefail
           mkdir -p dist
-          cd mobile
 
+          cd mobile
           eas build \
             --platform android \
             --profile preview \
             --non-interactive \
             --json \
             --no-wait > ../dist/eas-build.json
-
           cd ..
+
           node - <<'NODE'
           const fs = require('fs');
           const txt = fs.readFileSync('dist/eas-build.json','utf8').trim();
@@ -138,11 +78,11 @@ jobs:
           const id = b.id || b.buildId || (b.build && b.build.id);
           if (!id) { console.error('No build id in JSON'); process.exit(1); }
           fs.writeFileSync('dist/build-id.txt', String(id));
-          console.log('BUILD_ID=' + id);
+          console.log('✅ BUILD_ID=' + id);
           NODE
 
-      - name: Upload metadata
+      - name: Upload dist artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: eas-android-preview-meta
+          name: eas-android-preview
           path: dist/
