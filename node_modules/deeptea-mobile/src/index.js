@@ -1,1 +1,0 @@
-export { default as Nearby } from './screens/Nearby';
