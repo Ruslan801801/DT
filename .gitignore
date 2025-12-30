@@ -8,3 +8,10 @@ dist/
 # EAS local Android credentials (DO NOT COMMIT)
 mobile/credentials.json
 mobile/credentials/
+
+# dependencies
+node_modules/
+**/node_modules/
+
+# builds
+dist/
