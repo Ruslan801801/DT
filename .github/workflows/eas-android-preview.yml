@@ -8,163 +8,91 @@ on:
       - "mobile/**"
       - ".github/workflows/eas-android-preview.yml"
 
+permissions:
+  contents: read
+
 jobs:
-  build-android-apk:
+  build_android_apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 80
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Use Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
 
-      - name: Setup Java (for keytool)
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Install EAS CLI
-        run: npm i -g eas-cli@16.28.0
-
-      - name: Install mobile dependencies
+      - name: Install dependencies (mobile)
         working-directory: mobile
         run: |
-          set -euo pipefail
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+          rm -rf node_modules
+          npm ci || npm install
 
-      - name: Create ephemeral Android keystore + credentials.json (CI only)
-        working-directory: mobile
+      - name: Install EAS CLI (pinned)
         run: |
-          set -euo pipefail
-
-          mkdir -p android/keystores
-          KEYSTORE_PATH="android/keystores/release.keystore"
-          KEY_ALIAS="dtpreview"
-
-          STORE_PASS="$(openssl rand -hex 16)"
-          KEY_PASS="$(openssl rand -hex 16)"
-
-          keytool -genkeypair -v \
-            -storetype JKS \
-            -keystore "$KEYSTORE_PATH" \
-            -alias "$KEY_ALIAS" \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass "$STORE_PASS" \
-            -keypass "$KEY_PASS" \
-            -dname "CN=DT Preview,OU=CI,O=DT,L=Oslo,S=Oslo,C=NO"
-
-          cat > credentials.json <<JSON
-          {
-            "android": {
-              "keystore": {
-                "keystorePath": "$KEYSTORE_PATH",
-                "keystorePassword": "$STORE_PASS",
-                "keyAlias": "$KEY_ALIAS",
-                "keyPassword": "$KEY_PASS"
-              }
-            }
-          }
-          JSON
+          npm i -g eas-cli@16.28.0
+          eas --version
 
       - name: Start EAS build (no-wait)
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-          EAS_NO_VCS: "1"
+        id: start
+        working-directory: mobile
         run: |
-          set -euo pipefail
-          mkdir -p dist
-          cd mobile
+          mkdir -p ../dist
           eas build --platform android --profile preview --non-interactive --json --no-wait > ../dist/eas-build.json
-          cd ..
 
-      - name: Extract BUILD_ID
+          BUILD_ID=$(node -e "const fs=require('fs'); const txt=fs.readFileSync('../dist/eas-build.json','utf8').trim(); const j=JSON.parse(txt); const b=Array.isArray(j)?j[0]:j; const id=b.id||b.buildId||(b.build&&b.build.id); if(!id) process.exit(2); console.log(id);")
+          echo "BUILD_ID=$BUILD_ID"
+          echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
+          echo "$BUILD_ID" > ../dist/build-id.txt
+
+      - name: Wait for build + download artifact
+        id: wait
         run: |
           set -euo pipefail
-          node - <<'NODE'
-          const fs = require('fs');
-          const txt = fs.readFileSync('dist/eas-build.json','utf8').trim();
-          if (!txt) throw new Error('eas-build.json is empty');
-          const j = JSON.parse(txt);
-          const b = Array.isArray(j) ? j[0] : j;
-          const id = b.id || b.buildId || (b.build && b.build.id);
-          if (!id) throw new Error('No build id in JSON');
-          fs.writeFileSync('dist/build-id.txt', String(id));
-          console.log('BUILD_ID=' + id);
-          NODE
-
-      - name: Wait build finish + download APK
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          BUILD_ID="$(cat dist/build-id.txt)"
+          BUILD_ID="${{ steps.start.outputs.build_id }}"
           echo "Waiting for EAS build: $BUILD_ID"
+          mkdir -p dist
 
-          for i in $(seq 1 240); do
-            cd mobile
-            eas build:view "$BUILD_ID" --json > ../dist/build-view.json
-            cd ..
+          for i in $(seq 1 180); do
+            eas build:view "$BUILD_ID" --json > dist/build-view.json
 
-            set +e
-node - <<'NODE'
-const fs = require('fs');
-const b = JSON.parse(fs.readFileSync('dist/build-view.json','utf8'));
+            STATUS=$(node -e "const b=require('./dist/build-view.json'); console.log(String(b.status||'').toUpperCase());")
+            echo "STATUS=$STATUS"
 
-const status = String(b.status || '').toUpperCase();
-const artifacts = b.artifacts || {};
-const url =
-  artifacts.buildUrl ||
-  artifacts.applicationArchiveUrl ||
-  artifacts.apkUrl ||
-  artifacts.url ||
-  null;
-
-console.log(`STATUS=${status}`);
-if (status === 'FINISHED' && url) {
-  fs.writeFileSync('dist/artifact-url.txt', url);
-  process.exit(0);
-}
-if (['ERRORED','CANCELED'].includes(status)) {
-  console.error('Build failed with status: ' + status);
-  process.exit(2);
-}
-process.exit(1);
-NODE
-            rc=$?
-            set -e
-
-            if [ "$rc" = "0" ]; then
-              echo "Build finished."
-              break
+            if [ "$STATUS" = "FINISHED" ]; then
+              URL=$(node -e "const b=require('./dist/build-view.json'); const a=b.artifacts||{}; console.log(a.buildUrl||a.applicationArchiveUrl||a.apkUrl||a.url||'');")
+              if [ -n "$URL" ]; then
+                echo "$URL" > dist/artifact-url.txt
+                break
+              fi
             fi
-            if [ "$rc" = "2" ]; then
-              echo "Build failed. See dist/build-view.json."
+
+            if [ "$STATUS" = "ERRORED" ] || [ "$STATUS" = "CANCELED" ]; then
+              echo "Build failed. See dist/build-view.json"
               exit 1
             fi
 
-            sleep 15
+            sleep 20
           done
 
           test -f dist/artifact-url.txt
           URL="$(cat dist/artifact-url.txt)"
-          echo "APK URL: $URL"
-          curl -L "$URL" -o dist/DT-preview.apk
+          echo "Artifact URL: $URL"
+          curl -L "$URL" -o dist/app.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DT-preview-apk
-          path: dist/DT-preview.apk
-          if-no-files-found: error
+          name: android-preview-apk
+          path: |
+            dist/app.apk
+            dist/build-view.json
+            dist/artifact-url.txt
+            dist/../dist/eas-build.json
